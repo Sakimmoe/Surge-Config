@@ -9,26 +9,55 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 ## 功能
 
 1. 安装 / 重装 Snell（snell-server v6.0.0rc2 官方二进制）
-2. 更新 snell-server（备份 + 失败自动回滚，跨 v5→v6 自动迁移配置）
-3. 查看节点配置
-4. 更改端口
-5. 更改密码
-6. 切换监听模式（IPv4 / 双栈 / IPv6）与协议模式（default / unshaped / unsafe-raw）
-7. 重启服务
-8. 查看运行状态
+2. 查看节点配置
+3. 更改端口
+4. 更改密码
+5. 切换监听模式（IPv4 / 双栈 / IPv6）与协议模式（default / unshaped / unsafe-raw）
+6. 重启服务
+7. 查看运行状态
+8. 一键体检（服务 / BBR / 网络优化 / Swap / DNS / UFW / 时区）
 9. 重新应用网络优化 / 调整 Swap
 10. 卸载
 0. 退出
 
-## 更新 Snell 版本
+## 手动更新 Snell（服务端）
 
-官方发布新版本（例如 v6.0.0rc3）后，仓库更新只需三步：
+脚本不再提供在线更新，官方发布新版本后手动操作：
 
-1. 把 `Snell/snell` 里的 `SNELL_VERSION` 改成新版，例如 `"v6.0.0rc3"`
-2. 从官方发布页下载 amd64 / i386 / aarch64 三个 zip，替换 `vendor/` 里的旧包，并同步更新本 README 里的 SHA256
-3. 提交并推送
+```bash
+# 1. 停止服务并备份
+systemctl stop snell
+cp /usr/local/bin/snell-server /root/snell-server.bak
+cp /etc/snell/snell-server.conf /root/snell-server.conf.bak
 
-服务器端：重新运行一键命令刷新面板后，菜单选 2「更新」即可。脚本会记录已安装的完整版本（含 rc 后缀），rc2 → rc3 能正常识别并升级，不会误判成“已是最新”。
+# 2. 从官方发布页下载新版（按架构选，例如 amd64）
+curl -fLO https://dl.nssurge.com/snell/snell-server-v6.0.0rc3-linux-amd64.zip
+
+# 3. 解压并替换二进制
+unzip -o snell-server-v6.0.0rc3-linux-amd64.zip -d /tmp/snell-new
+cp /tmp/snell-new/snell-server /usr/local/bin/snell-server
+chmod +x /usr/local/bin/snell-server
+
+# 4. 官方说明有变才改配置，保持 listen / psk / mode / dns / dns-ip-preference
+nano /etc/snell/snell-server.conf
+
+# 5. 启动并验证
+systemctl start snell
+systemctl status snell --no-pager
+ss -tlnp | grep snell
+journalctl -u snell -n 30 --no-pager
+```
+
+失败回滚：
+
+```bash
+systemctl stop snell
+cp /root/snell-server.bak /usr/local/bin/snell-server
+cp /root/snell-server.conf.bak /etc/snell/snell-server.conf
+systemctl start snell
+```
+
+如果同时要更新仓库里的 `vendor/` 备用源（纯 IPv6 服务器下载用）：把三个架构的新 zip 放进 `vendor/`、改 `SNELL_VERSION`、更新下面的 SHA256 并推送。
 
 ## 日志与清理
 

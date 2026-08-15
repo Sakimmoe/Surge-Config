@@ -1,5 +1,12 @@
 # Snell 脚本审查与变更记录
 
+## 移除更新功能（改为手动更新）
+
+- 删除菜单 2「更新」、`--upgrade` 入口、`update_snell` / v5→v6 迁移 / 回滚函数、`snell -v/--upgrade` 快捷参数
+- 删除不再使用的版本记录与相关函数：`.version`、`get_installed_version`、`get_remote_version`、`cleanup_old`、`get_ip`、`get_conf_mode` 等
+- 菜单重排：2 查看节点配置、3 更改端口、4 更改密码、5 监听/协议模式、6 重启、7 运行状态、8 一键体检（新增）、9 重新应用网络优化 / 调整 Swap、10 卸载、0 退出（9/10/0 位置保持不变）
+- 服务端升级改为手动：备份 → 下载官方包 → 替换二进制 → 按需改配置 → 验证 → 失败回滚，完整步骤见 README
+
 ## v3.0.5（Debian/Ubuntu 长期使用的清理与日志优化）
 
 - 清理脚本针对 Debian/Ubuntu 调整：
@@ -23,12 +30,6 @@
   - apt：只装 `curl unzip ufw iproute2 cron ca-certificates`，不再装 `wget` / `tar`
   - dnf / yum：只装 `curl unzip cronie ca-certificates`，不再装未使用的 `firewalld` / `tar`
   - 下载改用 curl 优先，wget 仅作为可选回退（有就用到，没有也不安装）
-
-## 版本记录与更新流程
-
-- 新增 `/etc/snell/.version` 记录已安装的完整版本（含 rc 后缀，如 `6.0.0rc2`）
-- 更新检查改用完整版本比较；老安装没有版本记录时，按去掉 rc 后缀的主版本兼容一次，避免误判
-- 官方出新版（如 rc3）后，更新仓库的 `SNELL_VERSION` + `vendor/` 包 + SHA256 并推送，服务器端菜单 2 即可升级
 
 ## v3.0.4（IPv4 / IPv6 节点行都输出）
 
@@ -88,7 +89,7 @@
 - `judge()` 失败检测不可靠：部分命令后带 `|| true`，失败也可能显示“完成”
 - UFW 使用 `--force reset`，会清空服务器已有防火墙规则
 - 卸载不会恢复 DNS、Swap、sysctl 等系统改动
-- “检查更新”比较的是脚本内硬编码版本号 v6.0.0rc2，不会在线发现新版本；官方正式版出来后需人工更新脚本
+- 脚本不再提供在线更新；官方出新版后按 README 的手动步骤备份、替换二进制、按需改配置并验证
 - v6 仍是 RC 测试版，官方可能在正式版前做不兼容协议调整；客户端 Surge 也必须更新到支持 v6 的测试版
 - 仅 IPv6 模式使用 `[::]` 监听，Linux 默认 IPv6 套接字可能同时接受 IPv4 映射连接（与 v5 同源限制）
 - 设置时区、禁用 systemd-resolved、覆盖 DNS 等属于“代理机专用”的激进改动

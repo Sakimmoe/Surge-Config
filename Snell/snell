@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Snell (snell-server) 一键管理脚本：安装/更新/查看/更改端口/更改密码/切换监听模式/卸载
+# Snell (snell-server) 一键管理脚本：安装、查看、更改端口/密码、切换监听模式、体检、卸载
 # 基于官方 snell-server v6 闭源二进制，无证书/TLS 依赖
 # 搭建方法参考: getsomecat/GetSomeCats 简单搭建Snell服务.md
 # 整体优化与搭建方式套用: Sakimmoe/AnyTLS anytls 脚本
@@ -19,10 +19,8 @@ LIST_FILE="${CONFIG_DIR}/list"
 CRON_CLEAN="/etc/cron.d/snell-cleanup"
 STACK_FILE="${CONFIG_DIR}/.stack"
 MODE_FILE="${CONFIG_DIR}/.mode"
-VERSION_FILE="${CONFIG_DIR}/.version"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
-TZ_DEFAULT="Asia/Shanghai"
 SHELL_VERSION="0.0.9"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
@@ -90,17 +88,6 @@ get_local_version() {
   else
     echo "未安装"
   fi
-}
-
-get_installed_version() {
-  local v
-  v=$(cat "$VERSION_FILE" 2>/dev/null || true)
-  [[ -n "$v" ]] || v=$(get_local_version)
-  echo "$v"
-}
-
-get_remote_version() {
-  echo "${SNELL_VERSION#v}"
 }
 
 install_status_text() {
@@ -227,15 +214,6 @@ read_mode_interactive() {
   echo "$mode"
 }
 
-get_ip() {
-  local ip4 ip6
-  ip4=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
-  [[ -n "$ip4" ]] && { echo "$ip4"; return; }
-  ip6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org 2>/dev/null || true)
-  [[ -n "$ip6" ]] && { echo "$ip6"; return; }
-  echo "未知"
-}
-
 check_system_ip() {
   IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
   IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org 2>/dev/null || echo "")
@@ -274,12 +252,6 @@ get_conf_port() {
 
 get_conf_psk() {
   sed -n 's/^psk[[:space:]]*=//p' "$CONF_FILE" 2>/dev/null | tr -d ' \r' | head -1 || true
-}
-
-get_conf_mode() {
-  local m
-  m=$(sed -n 's/^mode[[:space:]]*=//p' "$CONF_FILE" 2>/dev/null | tr -d ' \r' | head -1 || true)
-  echo "${m:-default}"
 }
 
 # 生成 v6 的多地址 listen / dns / dns-ip-preference
@@ -376,15 +348,6 @@ download_snell() {
   fi
   rm -rf "$TMP_DL"
   echo "${SNELL_VERSION#v}"
-}
-
-# ==================== 清理垃圾 ====================
-cleanup_old() {
-  rm -f /usr/local/bin/snell-server.bak
-  rm -f /usr/local/bin/snell-server.tmp.*
-  rm -f "${CONFIG_DIR}"/*.tmp 2>/dev/null || true
-  rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip 2>/dev/null || true
-  apt-get clean >/dev/null 2>&1 || true
 }
 
 # ==================== 防火墙配置 ====================
@@ -596,13 +559,6 @@ PANEL="/usr/local/bin/snell-panel.sh"
 [[ -f "$PANEL" && -s "$PANEL" ]] || PANEL="/etc/snell/snell-panel.sh"
 
 case "${1:-}" in
-  -v|--upgrade)
-    if [[ -f "$PANEL" && -s "$PANEL" ]]; then
-      exec bash "$PANEL" --upgrade --auto
-    else
-      echo "未找到面板脚本"
-    fi
-    ;;
   --cleanup)
     rm -f /usr/local/bin/snell-server.bak
     rm -f /usr/local/bin/snell-server.tmp.*
@@ -615,7 +571,6 @@ case "${1:-}" in
       exec bash "$PANEL" "$@"
     else
       echo "Snell 快捷命令"
-      echo "  snell -v, --upgrade  升级 snell-server"
       echo "  snell --cleanup      清理旧备份"
     fi
     ;;
@@ -904,7 +859,6 @@ EOF
     exit 1
   fi
   print_ok "snell-server 已安装: ${VER}"
-  echo "${SNELL_VERSION#v}" > "$VERSION_FILE"
 
   # 根据栈类型生成配置
   mkdir -p "$CONFIG_DIR"
@@ -978,206 +932,6 @@ EOF
   echo ""
 
   pause
-}
-
-# ==================== 核心功能：更新 ====================
-restore_old_binary() {
-  if [[ -x /usr/local/bin/snell-server.bak ]]; then
-    cp -f /usr/local/bin/snell-server.bak /usr/local/bin/snell-server
-    chmod +x /usr/local/bin/snell-server
-    rm -f /usr/local/bin/snell-server.bak
-  fi
-}
-
-# 从 v5（或更早）配置迁移到 v6：多地址 listen + mode + dns-ip-preference
-migrate_conf_to_v6() {
-  local PORT PASS STACK MODE
-  if [[ -f "$CONF_FILE" ]]; then
-    cp -f "$CONF_FILE" "${CONF_FILE}.v5bak"
-  fi
-  if [[ -f "$STACK_FILE" ]]; then
-    cp -f "$STACK_FILE" "${STACK_FILE}.v5bak"
-  fi
-  PORT=$(get_conf_port)
-  [[ -n "$PORT" ]] || PORT=26216
-  PASS=$(get_conf_psk)
-  [[ -n "$PASS" ]] || PASS=$(gen_password)
-
-  STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "dual")
-  if grep -q '^ipv6[[:space:]]*=[[:space:]]*false' "$CONF_FILE" 2>/dev/null; then
-    STACK="v4only"
-  fi
-  case "$STACK" in
-    v4only|v6only) ;;
-    *) STACK="dual" ;;
-  esac
-  MODE="default"
-
-  mkdir -p "$CONFIG_DIR"
-  echo "$STACK" > "$STACK_FILE"
-  echo "$MODE" > "$MODE_FILE"
-  write_snell_conf "$PORT" "$PASS" "$STACK" "$MODE"
-}
-
-restore_old_config() {
-  if [[ -f "${CONF_FILE}.v5bak" ]]; then
-    cp -f "${CONF_FILE}.v5bak" "$CONF_FILE"
-    rm -f "${CONF_FILE}.v5bak"
-  fi
-  if [[ -f "${STACK_FILE}.v5bak" ]]; then
-    cp -f "${STACK_FILE}.v5bak" "$STACK_FILE"
-    rm -f "${STACK_FILE}.v5bak"
-  fi
-  rm -f "$MODE_FILE"
-}
-
-update_snell() {
-  local AUTO_UPDATE=false
-
-  if [[ "${1:-}" == "--auto" ]]; then
-    AUTO_UPDATE=true
-  fi
-
-  # 确保在自动更新时也有架构变量
-  if [[ -z "${ARCH:-}" ]]; then
-    ARCH=$(get_arch)
-  fi
-
-  if [[ "$AUTO_UPDATE" != true ]]; then
-    clear
-  fi
-
-  hr
-  print_info "检查 snell-server / Snell 更新"
-  hr
-
-  if ! is_installed; then
-    print_err "Snell 未安装，无法更新"
-    if [[ "$AUTO_UPDATE" != true ]]; then
-      pause
-    fi
-    return
-  fi
-
-  local LOCAL_VER=$(get_installed_version)
-  local REMOTE_VER=$(get_remote_version)
-
-  if [[ -z "$REMOTE_VER" ]]; then
-    print_err "获取在线版本失败，请检查网络"
-    if [[ "$AUTO_UPDATE" != true ]]; then
-      pause
-    fi
-    return
-  fi
-
-  echo -e " 本地版本: ${LOCAL_VER}"
-  echo -e " 远程版本: ${REMOTE_VER}"
-
-  # 老安装没有版本记录文件：二进制 -v 只输出 6.0.0（无 rc 后缀）。
-  # 远程为正式版时按主版本兼容；远程是 rc 版则走一次更新流程以记录完整版本
-  if [[ ! -f "$VERSION_FILE" && "$REMOTE_VER" != *rc* ]]; then
-    local REMOTE_BASE
-    REMOTE_BASE=$(printf '%s\n' "$REMOTE_VER" | sed -E 's/rc[0-9]+$//')
-    if [[ "$LOCAL_VER" = "$REMOTE_BASE" ]]; then
-      print_ok "当前已是最新版本"
-      if [[ "$AUTO_UPDATE" != true ]]; then
-        pause
-      fi
-      return
-    fi
-  fi
-
-  if [[ "$LOCAL_VER" = "$REMOTE_VER" ]]; then
-    print_ok "当前已是最新版本"
-    if [[ "$AUTO_UPDATE" != true ]]; then
-      pause
-    fi
-    return
-  fi
-
-  local ans
-  if [[ "$AUTO_UPDATE" == true ]]; then
-    ans="y"
-    print_info "自动更新模式，确认升级到 ${REMOTE_VER}"
-  else
-    read -rp "是否升级到 ${REMOTE_VER}? [y/N]: " ans
-  fi
-
-  [[ ! "${ans:-N}" =~ ^[Yy]$ ]] && {
-    print_info "已取消"
-    [[ "$AUTO_UPDATE" != true ]] && pause
-    return
-  }
-
-  print_info "备份旧版本..."
-  rm -f /usr/local/bin/snell-server.bak
-  if [[ -x /usr/local/bin/snell-server ]]; then
-    cp -f /usr/local/bin/snell-server /usr/local/bin/snell-server.bak
-  fi
-
-  print_info "下载新版本..."
-  local DOWNLOADED
-  DOWNLOADED=$(download_snell /usr/local/bin/snell-server) || DOWNLOADED=""
-  if [[ -z "$DOWNLOADED" ]]; then
-    print_err "下载失败，恢复旧版本..."
-    restore_old_binary
-    [[ "$AUTO_UPDATE" != true ]] && pause
-    return
-  fi
-
-  local LOCAL_MAJOR REMOTE_MAJOR NEED_MIGRATE=false
-  LOCAL_MAJOR=$(printf '%s\n' "$LOCAL_VER" | cut -d. -f1)
-  REMOTE_MAJOR=$(printf '%s\n' "$REMOTE_VER" | cut -d. -f1)
-  if [[ "$LOCAL_MAJOR" =~ ^[0-9]+$ && "$REMOTE_MAJOR" =~ ^[0-9]+$ && "$LOCAL_MAJOR" -lt "$REMOTE_MAJOR" ]]; then
-    NEED_MIGRATE=true
-  fi
-  if [[ "$NEED_MIGRATE" == true ]]; then
-    print_info "检测到跨大版本升级，正在把配置迁移到 v6 格式..."
-    if ! migrate_conf_to_v6; then
-      print_err "配置迁移失败，恢复旧版本..."
-      restore_old_binary
-      restore_old_config
-      [[ "$AUTO_UPDATE" != true ]] && pause
-      return
-    fi
-    print_ok "配置已迁移（mode=default，可在菜单 6 中修改）"
-  fi
-
-  print_info "重启服务..."
-  systemctl restart snell >/dev/null 2>&1 || true
-  sleep 2
-
-  if systemctl is-active --quiet snell; then
-    print_ok "升级成功！当前版本: $(get_installed_version)"
-    echo "${SNELL_VERSION#v}" > "$VERSION_FILE"
-    ensure_service_loglevel
-    rm -f /usr/local/bin/snell-server.bak
-    rm -f "${CONF_FILE}.v5bak" "${STACK_FILE}.v5bak"
-    cleanup_old
-    if [[ "$NEED_MIGRATE" == true ]]; then
-      local MPORT MPASS MMODE
-      MPORT=$(get_conf_port)
-      MPASS=$(get_conf_psk)
-      MMODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
-      export_snell_info "$MPORT" "$MPASS" "$MMODE"
-    else
-      [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_installed_version)/" "$LIST_FILE"
-    fi
-  else
-    print_err "新版本启动失败，恢复旧版本..."
-    restore_old_binary
-    if [[ "$NEED_MIGRATE" == true ]]; then
-      restore_old_config
-    fi
-    systemctl restart snell >/dev/null 2>&1 || true
-    sleep 2
-    if systemctl is-active --quiet snell; then
-      print_ok "已恢复旧版本，服务正常运行"
-    else
-      print_err "恢复后服务仍异常，请检查: journalctl -u snell -n 30"
-    fi
-  fi
-  [[ "$AUTO_UPDATE" != true ]] && pause
 }
 
 # ==================== 查看配置 ====================
@@ -1412,6 +1166,37 @@ status_service() {
   pause
 }
 
+# ==================== 一键体检 ====================
+health_check() {
+  clear
+  hr
+  print_info "Snell 一键体检"
+  hr
+  echo "=== Snell 服务 ==="
+  systemctl is-enabled snell --no-pager 2>/dev/null || true
+  systemctl is-active snell --no-pager 2>/dev/null || true
+  echo "=== 监听端口 ==="
+  ss -tlnp | grep snell || echo "未发现 snell 监听端口"
+  echo "=== BBR ==="
+  sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc 2>/dev/null || true
+  echo "=== TCP/网络优化 ==="
+  sysctl net.ipv4.tcp_fastopen net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.rmem_max net.core.wmem_max vm.swappiness 2>/dev/null || true
+  echo "=== Swap ==="
+  free -h
+  systemctl is-enabled disable-swap --no-pager 2>/dev/null || true
+  echo "=== DNS ==="
+  cat /etc/resolv.conf
+  systemctl is-enabled systemd-resolved --no-pager 2>/dev/null || true
+  echo "=== UFW ==="
+  ufw status | head -10
+  echo "=== 时区 ==="
+  timedatectl show -p Timezone --value 2>/dev/null || true
+  echo "=== 快捷命令 ==="
+  ls -l /usr/local/bin/s 2>/dev/null || true
+  hr
+  pause
+}
+
 # ==================== 卸载 ====================
 uninstall_snell() {
   clear
@@ -1456,17 +1241,17 @@ main() {
     echo -e " 基于官方 snell-server 闭源二进制 | 无证书依赖"
     echo -e " 当前脚本版本: ${Magenta}${SHELL_VERSION}${Font}"
     echo -e " 安装状态：$(install_status_text)"
-    echo -e " snell-server 版本: ${Cyan}$(get_installed_version)${Font}"
+    echo -e " snell-server 版本: ${Cyan}$(get_local_version)${Font}"
     echo -e " 快捷命令: ${BGreen}s${Font}（直接输入 s 即可打开本面板）"
     hr
     echo -e "${Cyan} 1. 安装 / 重装 Snell${Font}"
-    echo -e "${Cyan} 2. 更新 snell-server / Snell${Font}"
-    echo -e "${Cyan} 3. 查看节点配置${Font}"
-    echo -e "${Cyan} 4. 更改端口${Font}"
-    echo -e "${Cyan} 5. 更改密码${Font}"
-    echo -e "${Cyan} 6. 切换监听模式 / 协议模式${Font}"
-    echo -e "${Cyan} 7. 重启服务${Font}"
-    echo -e "${Cyan} 8. 查看运行状态${Font}"
+    echo -e "${Cyan} 2. 查看节点配置${Font}"
+    echo -e "${Cyan} 3. 更改端口${Font}"
+    echo -e "${Cyan} 4. 更改密码${Font}"
+    echo -e "${Cyan} 5. 切换监听模式 / 协议模式${Font}"
+    echo -e "${Cyan} 6. 重启服务${Font}"
+    echo -e "${Cyan} 7. 查看运行状态${Font}"
+    echo -e "${Cyan} 8. 一键体检${Font}"
     echo -e "${Cyan} 9. 重新应用网络优化 / 调整 Swap${Font}"
     echo -e "${Cyan} 10. 卸载 Snell${Font}"
     echo -e "${Cyan} 0. 退出${Font}"
@@ -1475,13 +1260,13 @@ main() {
 
     case "$choice" in
       1) install_snell ;;
-      2) update_snell ;;
-      3) view_config ;;
-      4) change_port ;;
-      5) change_password ;;
-      6) change_mode ;;
-      7) restart_service ;;
-      8) status_service ;;
+      2) view_config ;;
+      3) change_port ;;
+      4) change_password ;;
+      5) change_mode ;;
+      6) restart_service ;;
+      7) status_service ;;
+      8) health_check ;;
       9) apply_network_optimization; setup_swap; setup_cron; create_shortcut ;;
       10) uninstall_snell ;;
       0) exit 0 ;;
@@ -1489,19 +1274,6 @@ main() {
     esac
   done
 }
-
-# 参数入口
-if [[ "${1:-}" == "--upgrade" ]]; then
-  ensure_root
-
-  if [[ "${2:-}" == "--auto" ]]; then
-    update_snell --auto
-  else
-    update_snell
-  fi
-
-  exit 0
-fi
 
 ensure_root
 create_shortcut

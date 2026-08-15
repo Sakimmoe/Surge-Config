@@ -1,132 +1,75 @@
-# Snell 脚本版本升级教程（改脚本 + 服务器重装）
+# Snell 脚本版本升级教程（纯手动修改）
 
-适用场景：官方发布新版本（例如 v6.0.0rc3）后，把仓库脚本升级到新版，然后服务器重新安装。
+适用场景：官方发布新版本（例如 v6.0.0rc3）后，手动改仓库代码，再在服务器上重新安装。脚本已移除在线更新功能。
 
-脚本已经移除在线更新功能，所以升级必须按这个流程手动操作。
+行号以仓库 main 分支当前版本为准；改动后行号会变化，按标记文字搜索即可。
 
-## 一、仓库端修改
+## 需要改的文件
 
-### 1. 拿到官方新版下载链接
+| 文件 | 作用 |
+| --- | --- |
+| `Snell/snell` | 版本号、配置生成、客户端节点行、服务启动参数 |
+| `vendor/` | 三个架构的官方安装包（IPv6 备用下载源） |
+| `Snell/README.md` | 版本描述、SHA256 |
 
-官方发布说明：
+## 一、改脚本版本号
 
-<https://kb.nssurge.com/surge-knowledge-base/release-notes/snell>
+文件：`Snell/snell`
 
-复制新版号，例如 `v6.0.0rc3`。注意官方只提供 amd64 / i386 / aarch64，没有 armv7l。
+- 第 23 行：`SNELL_VERSION="v6.0.0rc2"`
+- 把 `v6.0.0rc2` 改成新版号，例如 `v6.0.0rc3`
 
-### 2. 修改脚本里的版本号
+这一行决定下载哪个版本：脚本第 309 行按 `${SNELL_VERSION}` 拼官方下载地址，第 310 行按它拼仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
 
-打开 `Snell/snell`，找到：
+## 二、替换 vendor/ 安装包
 
-```bash
-SNELL_VERSION="v6.0.0rc2"
-```
+- 删除 `vendor/` 里旧的三个文件：
+  - `snell-server-v6.0.0rc2-linux-amd64.zip`
+  - `snell-server-v6.0.0rc2-linux-i386.zip`
+  - `snell-server-v6.0.0rc2-linux-aarch64.zip`
+- 放入新版三个文件，文件名严格保持 `snell-server-v6.0.0rc3-linux-amd64.zip` 这种格式（amd64 / i386 / aarch64）
 
-改成：
+## 三、改 Snell/README.md
 
-```bash
-SNELL_VERSION="v6.0.0rc3"
-```
+- 第 11 行：功能第 1 条里的 `snell-server v6.0.0rc2` 改成新版号
+- 第 75-80 行：「官方安装包 SHA256」一节，把三行哈希和文件名换成新包的值（哈希用你常用的校验工具算）
 
-### 3. 下载三个官方安装包
+## 四、新版本配置格式变了才改的代码
 
-```bash
-curl -fLO https://dl.nssurge.com/snell/snell-server-v6.0.0rc3-linux-amd64.zip
-curl -fLO https://dl.nssurge.com/snell/snell-server-v6.0.0rc3-linux-i386.zip
-curl -fLO https://dl.nssurge.com/snell/snell-server-v6.0.0rc3-linux-aarch64.zip
-```
+官方发布说明里如果新增、删除或改名了配置项，才需要动下面这些地方：
 
-### 4. 替换仓库里的 vendor/ 备用源
+1. 配置文件模板
+   - 文件：`Snell/snell`
+   - 第 284 行开始：`write_snell_conf()`，生成的配置内容是 `listen / psk / mode / dns / dns-ip-preference`
+   - 官方改了配置键就在这里增删对应行
+2. 三种网络模式的取值
+   - 第 258 行：`make_listen()`，三种模式的监听地址
+   - 第 267 行：`make_dns()`，三种模式的 DNS 服务器
+   - 第 275 行：`make_dns_pref()`，三种模式的 `dns-ip-preference`
+3. 客户端节点行
+   - 第 431 行开始：`export_snell_info()`
+   - 第 437-438 行：`EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
+   - 第 442、445、448 行：IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
+4. 服务启动参数
+   - 第 887 行：`ExecStart=/usr/local/bin/snell-server -c ... --loglevel warning`
+   - 新版命令行参数有变化就改这一行
+5. 安装依赖（一般不用动）
+   - 第 769 行：Debian/Ubuntu 的依赖安装列表；新版本有新依赖才加
 
-`vendor/` 是纯 IPv6 服务器下载失败时的官方二进制备用源：
+## 五、推送仓库
 
-- 删除旧的 `snell-server-v6.0.0rc2-linux-*.zip`
-- 放入新的 `snell-server-v6.0.0rc3-linux-*.zip`
+改完后提交并推送到 GitHub，确保 `main` 分支是更新后的版本。
 
-### 5. 更新 README 里的 SHA256
+## 六、服务器重新安装
 
-```bash
-sha256sum snell-server-v6.0.0rc3-linux-*.zip
-```
+1. 先打开 `/etc/snell/snell-server.conf`，记下端口和密码
+2. 在服务器上重新运行一键命令（脚本启动时会自动刷新本地的 `s` 面板）
+3. 选 1「安装 / 重装 Snell」
+4. 端口、密码填回原来的值；协议模式按客户端选择（默认选 1 `default`）
+5. 安装完成看输出版本号，再进面板选 8 一键体检确认服务正常
 
-把 `Snell/README.md` 底部“官方安装包 SHA256”一节替换成新的三行。
+## 注意事项
 
-### 6. 检查其他版本号描述
-
-- `Snell/README.md` 功能第 1 条里的 `snell-server v6.0.0rc2`
-- 本教程里的示例链接（不影响使用，但建议保持一致）
-
-### 7. 如果新版本改了配置格式
-
-先看官方发布说明有没有新增/删除配置项，有变化就同步修改 `Snell/snell` 里生成配置的函数：
-
-- `write_snell_conf()`：生成 `listen / psk / mode / dns / dns-ip-preference`
-- `make_listen()` / `make_dns()` / `make_dns_pref()`：三种网络模式的对应值
-- `export_snell_info()`：客户端节点行，比如协议版本变了要把 `version=6` 改成新版本
-
-### 8. 提交并推送
-
-```bash
-git add -A
-git commit -m "Update Snell to v6.0.0rc3"
-git push origin main
-```
-
-## 二、服务器端重新安装
-
-### 1. 先记下当前端口和密码
-
-重装时端口和密码要填回一样的，客户端才不用改：
-
-```bash
-cat /etc/snell/snell-server.conf
-```
-
-或者在面板里看：`s` → 2 查看节点配置。
-
-### 2. 重新运行脚本
-
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell)
-```
-
-脚本启动时会自动刷新本地的 `s` 快捷面板。
-
-### 3. 选 1「安装 / 重装 Snell」
-
-- 端口：填回原来的端口
-- 密码：填回原来的密码（回车会生成新密码，客户端也要跟着改）
-- 协议模式：和客户端保持一致，默认选 1 `default`
-
-重装会先停止旧服务，下载新版失败时会自动重启旧服务，不会弄丢旧二进制。
-
-### 4. 验证新版
-
-安装完成看输出的版本号，再确认服务正常：
-
-```bash
-systemctl status snell --no-pager
-ss -tlnp | grep snell
-journalctl -u snell -n 20 --no-pager
-```
-
-也可以在面板里选 8 一键体检。
-
-### 5. 客户端
-
-- 端口、密码没变：Surge 里原来的节点行不用改
-- 变了：用安装完成后输出的 IPv4 / IPv6 节点行替换
-
-## 三、常见问题
-
-### 为什么不能用菜单更新了？
-
-脚本已移除在线更新功能，因为版本升级往往需要同步换配置，手动改更可控。
-
-### 重装会丢配置吗？
-
-重装会按你输入重新生成配置，所以先记下端口和密码。监听模式会自动按服务器网络检测，协议模式重新选一次。
-
-### 只想换二进制、不想动配置怎么办？
-
-可以只手动替换二进制：备份 → 下载 → 替换 `/usr/local/bin/snell-server` → 启动验证；或者重装时把所有参数填成和原来一样。
+- 版本号（第 23 行）、vendor 文件名、README 里的哈希三者必须对应同一个版本
+- 重装时端口和密码如果和原来不同，客户端 Surge 节点行也要跟着换
+- 官方说明没提配置变化时，只改第 23 行、vendor、README 三处即可

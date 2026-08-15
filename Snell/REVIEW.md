@@ -1,31 +1,27 @@
-# Snell 一键脚本审查意见
+# Snell 脚本审查与变更记录
 
-审查对象：[Sakimmoe/Snell](https://github.com/Sakimmoe/Snell) 仓库中的 `snell` 脚本（v1.1.4，snell-server v5.0.1）。整体结构清晰、功能完整，以下按严重程度列出发现的问题。
+## v2.0.0（重写版）
 
-## 需要重点验证
+按 [Sakimmoe/AnyTLS](https://github.com/Sakimmoe/AnyTLS/blob/main/anytls) 的整体优化/搭建方式重写，并按 [getsomecat/GetSomeCats 搭建文档](https://github.com/getsomecat/GetSomeCats/blob/Surge/%E7%AE%80%E5%8D%95%E6%90%AD%E5%BB%BASnell%E6%9C%8D%E5%8A%A1.md) 调整搭建细节。
 
-1. **监听地址写法与官方 v5 示例不一致**：脚本双栈/纯 IPv6 模式写入 `listen = [::]:端口`，官方 v5 示例为 `listen = ::0:端口`（见 Surge 官方部署教程）。如果安装后服务启动失败，优先检查这一项。另外“仅 IPv6”和“双栈”两种模式写入的是同一份配置，实际效果可能没有区别。
-2. **下载地址与版本**：`dl.nssurge.com/snell/snell-server-v5.0.1-linux-*.zip` 已核实为官方地址，v5.0.1 为当前稳定版。但“检查更新”实际比较的是脚本里硬编码的版本号，不会在线查询，官方已发布 v6 RC 也不会被发现。
+采用的内容：
 
-## 建议修复
+- 搭建方法：官方 `dl.nssurge.com` 下载 v5.0.1 → 解压到 `/usr/local/bin` → `/etc/snell/snell-server.conf` → systemd 以 nobody 运行（含 `CAP_NET_BIND_SERVICE`、syslog 输出、`LimitNOFILE`）
+- 套用 AnyTLS：BBR + fq、TCP Fast Open、大缓冲区、Swap 自动调整、UFW、每周清理、快捷命令、更新备份回滚、菜单结构
+- 客户端输出格式参考文档：`snell, IP, 端口, psk=..., version=5, reuse=true, ecn=true, tfo=true`
 
-3. **`judge()` 失败检测基本失效**：大量调用前都有 `|| true`（依赖安装、UFW 等），命令失败时 `$?` 仍是 0，会误报“完成”。建议改为直接判断命令返回值，或去掉 `|| true` 后再调用 `judge`。
-4. **UFW `--force reset` 过于激进**：会把服务器上已有的防火墙规则全部清空（包括 Docker 端口、其他服务），若 SSH 端口检测不准，开启 UFW 时可能直接断连。建议改为只放行/追加规则，或重置前明确确认。
-5. **卸载不完整**：卸载不会移除 `disable-swap.service`，不会恢复 DNS（`systemd-resolved` 仍被 mask，`/etc/resolv.conf` 仍是 1.1.1.1/8.8.8.8），sysctl 优化也不会回滚。卸载后系统与安装前不一致。
-6. **PSK 明文权限**：`/etc/snell/` 目录默认权限下，配置文件和节点信息（含密码）所有用户可读，建议 `chmod 600`。
-7. **依赖安装失败被吞掉**：`apt-get install ... || true` 后 `judge` 仍报完成，后续只检查了部分依赖；`ufw`、`cron` 缺失时只会警告。建议安装失败时直接报错退出。
+修复旧版问题：
 
-## 需要留意（设计取舍）
+- `listen = [::]:端口` → 官方 v5 写法 `listen = ::0:端口`
+- 配置文件权限收紧：`/etc/snell/snell-server.conf` 640（root:nogroup），节点信息 600
+- systemd 增加 User=nobody / Group 回退（CentOS 无 nogroup 时用 nobody）
+- 保留 PSK 16-180 位字符校验、IPv4/IPv6/双栈输出、`--upgrade` 快捷入口
 
-8. **强制关闭 Swap**：内存 ≥ 1G 时会关闭全部 Swap、删除 `/etc/fstab` 中所有 swap 条目并安装开机禁用服务，重负载下存在 OOM 风险；属于激进但明确的设计。
-9. **禁用 systemd-resolved 并覆盖 DNS**：会 mask `systemd-resolved` 并写入 1.1.1.1/8.8.8.8，仅适合“服务器只跑代理”的场景。
-10. **每周 `apt-get autoremove -y`**：自动清理依赖包，偶发可能误删其他服务需要的包（概率低）。
-11. **`kernel.panic = -1` 等 sysctl 参数**：`-1` 不是常见取值，部分内核可能报参数无效（脚本对此只警告不中断）。
-12. **下载无校验和验证**：HTTPS 下载官方二进制但未校验哈希，风险低，可考虑加上。
-13. **`curl | bash` 管道运行会破坏交互式输入**：请按 README 使用 `bash <(curl -sL ...)` 方式运行。
+## 仍保留的注意事项（继承自 AnyTLS 模板）
 
-## 其他小问题
-
-- `is_port_used` 把 UDP 占用也视为端口占用，Snell 只用 TCP。
-- 设置时区为 Asia/Shanghai 是脚本默认行为。
-- `a` 快捷命令名称过于通用，可能与现有命令冲突。
+- `judge()` 失败检测不可靠：部分命令后带 `|| true`，失败也可能显示“完成”
+- UFW 使用 `--force reset`，会清空服务器已有防火墙规则
+- 卸载不会恢复 DNS、Swap、sysctl 等系统改动
+- “检查更新”比较的是脚本内硬编码版本号 v5.0.1，不会在线发现新版本（官方已出 v6 RC）
+- 双栈与仅 IPv6 的 v5 配置写法相同（`listen = ::0`），实际差异取决于服务端实现
+- 设置时区、禁用 systemd-resolved、覆盖 DNS 等属于“代理机专用”的激进改动

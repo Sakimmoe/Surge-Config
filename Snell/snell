@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Snell (snell-server) 一键管理脚本：安装/更新/查看/更改端口/更改密码/切换监听模式/卸载
-# 基于官方 snell-server 闭源二进制，无证书/TLS 依赖
-# 智能双栈：IPv6 入站 + IPv4 出站优先 / 单栈自适应
+# 基于官方 snell-server v5 闭源二进制，无证书/TLS 依赖
+# 搭建方法参考: getsomecat/GetSomeCats 简单搭建Snell服务.md
+# 整体优化与搭建方式套用: Sakimmoe/AnyTLS anytls 脚本
 # 兼容 Debian/Ubuntu/CentOS，支持 amd64 / aarch64
 
 set -euo pipefail
@@ -21,9 +22,9 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v5.0.1"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="1.1.4"
-# 可选：如果将本脚本托管在 GitHub/Gist 等位置，在此填入 Raw 链接，在线一键安装时也能自动下载面板
-SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Snell/main/snell"
+SHELL_VERSION="2.0.0"
+# 可选：在线一键安装时，从这里下载面板脚本保存到本地
+SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
 # ==================== 颜色配置 ====================
 Font="\033[0m"
@@ -222,6 +223,12 @@ get_arch() {
   esac
 }
 
+get_service_group() {
+  local g
+  g=$(sed -n 's/^Group=//p' "$SNELL_SERVICE_FILE" 2>/dev/null | head -1)
+  echo "${g:-nogroup}"
+}
+
 # ==================== 配置文件读写 ====================
 get_conf_port() {
   sed -n 's/^listen[[:space:]]*=.*:\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$CONF_FILE" 2>/dev/null | head -1 || true
@@ -237,7 +244,7 @@ get_conf_addr() {
 
 write_snell_conf() {
   local PORT="$1" PASS="$2" STACK="$3"
-  local LISTEN_ADDR="[::]" ENABLE_IPV6="true"
+  local LISTEN_ADDR="::0" ENABLE_IPV6="true"
   if [[ "$STACK" == "v4only" ]]; then
     LISTEN_ADDR="0.0.0.0"
     ENABLE_IPV6="false"
@@ -248,6 +255,10 @@ listen = ${LISTEN_ADDR}:${PORT}
 psk = ${PASS}
 ipv6 = ${ENABLE_IPV6}
 EOF
+  local GRP
+  GRP=$(get_service_group)
+  chown "root:${GRP}" "$CONF_FILE" >/dev/null 2>&1 || chmod 644 "$CONF_FILE"
+  chmod 640 "$CONF_FILE" >/dev/null 2>&1 || true
 }
 
 # ==================== 下载 snell-server ====================
@@ -350,7 +361,7 @@ apt-get autoremove -y >/dev/null 2>&1 || true
 # systemd 日志：保留最近 7 天且总大小不超过 50M
 journalctl --vacuum-time=7d --vacuum-size=50M >/dev/null 2>&1 || true
 
-# 临时文件：只删 7 天以上的普通文件，再删 7 天以上的空目录，避免误删里面还有新文件的目录
+# 临时文件：只删 7 天以上的普通文件，再删 7 天以上的空目录
 find /tmp /var/tmp -mindepth 1 -type f -mtime +7 -delete >/dev/null 2>&1 || true
 find /tmp /var/tmp -mindepth 1 -type d -mtime +7 -empty -delete >/dev/null 2>&1 || true
 
@@ -391,10 +402,10 @@ export_snell_info() {
 
   local LINE4="" LINE6=""
   if [[ -n "$IPV4" ]]; then
-    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true"
+    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true, tfo=true"
   fi
   if [[ -n "$IPV6" ]]; then
-    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true"
+    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true, tfo=true"
   fi
 
   {
@@ -421,6 +432,7 @@ export_snell_info() {
     echo " 将上面的 Surge 配置行直接粘贴到 Surge 配置文件即可，"
     echo " 或在其他客户端中使用 服务器/端口/密码 手动填写（协议版本选择 v5）。"
   } > "$LIST_FILE"
+  chmod 600 "$LIST_FILE"
 }
 
 # ==================== 快捷命令配置 ====================
@@ -644,8 +656,7 @@ setup_swap() {
     if [[ -f "$SWAP_FILE" ]]; then
       rm -f "$SWAP_FILE"
     fi
-    # 安装开机强制关闭 swap 的服务：防止 fstab 之外的机制（GPT swap 分区自动挂载、
-    # systemd-swap、zram、云厂商脚本等）在重启后重新启用 swap
+    # 安装开机强制关闭 swap 的服务：防止 fstab 之外的机制在重启后重新启用 swap
     cat > "$SWAP_OFF_SERVICE" <<EOF
 [Unit]
 Description=Disable Swap (managed by one-click proxy script)
@@ -692,17 +703,17 @@ install_snell() {
   print_info "安装依赖..."
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq wget unzip curl ufw iproute2 cron jq tar >/dev/null 2>&1 || true
+    apt-get install -y -qq wget unzip curl ufw iproute2 cron tar >/dev/null 2>&1 || true
   elif command -v dnf >/dev/null 2>&1; then
     dnf update -y >/dev/null 2>&1 || true
-    dnf install -y wget unzip curl firewalld cronie jq tar >/dev/null 2>&1 || true
+    dnf install -y wget unzip curl firewalld cronie tar >/dev/null 2>&1 || true
   elif command -v yum >/dev/null 2>&1; then
     yum update -y >/dev/null 2>&1 || true
-    yum install -y wget unzip curl firewalld cronie jq tar >/dev/null 2>&1 || true
+    yum install -y wget unzip curl firewalld cronie tar >/dev/null 2>&1 || true
   fi
   judge "依赖安装"
 
-  for c in wget unzip curl jq tar; do
+  for c in wget unzip curl tar; do
     command -v "$c" >/dev/null 2>&1 || { print_err "缺少必要依赖: $c"; exit 1; }
   done
 
@@ -792,7 +803,14 @@ EOF
   echo "$IP_STACK" > "$STACK_FILE"
   write_snell_conf "$PORT" "$PASS" "$IP_STACK"
 
-  # systemd
+  # systemd（搭建方式参考 GetSomeCats 文档：nobody 运行 + CAP_NET_BIND_SERVICE）
+  local SVC_USER="nobody" SVC_GROUP="nogroup"
+  if ! getent group nogroup >/dev/null 2>&1; then
+    SVC_GROUP="nobody"
+  fi
+  chown "root:${SVC_GROUP}" "$CONF_FILE" >/dev/null 2>&1 || chmod 644 "$CONF_FILE"
+  chmod 640 "$CONF_FILE" >/dev/null 2>&1 || true
+
   cat > "$SNELL_SERVICE_FILE" <<EOF
 [Unit]
 Description=Snell Server (snell-server)
@@ -800,10 +818,16 @@ After=network.target
 
 [Service]
 Type=simple
+User=${SVC_USER}
+Group=${SVC_GROUP}
 LimitNOFILE=${NET_NOFILE_LIMIT:-1048576}
 ExecStart=/usr/local/bin/snell-server -c ${CONF_FILE}
 Restart=on-failure
 RestartSec=3s
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=snell-server
 
 [Install]
 WantedBy=multi-user.target
@@ -813,6 +837,11 @@ EOF
   systemctl enable snell >/dev/null 2>&1 || true
   systemctl restart snell >/dev/null 2>&1 || true
   sleep 2
+
+  for _ in 1 2 3; do
+    systemctl is-active --quiet snell && break
+    sleep 1
+  done
 
   if ! systemctl is-active --quiet snell; then
     print_err "Snell 启动失败"
@@ -861,7 +890,6 @@ restore_old_binary() {
 }
 
 update_snell() {
-
   local AUTO_UPDATE=false
 
   if [[ "${1:-}" == "--auto" ]]; then
@@ -912,7 +940,6 @@ update_snell() {
   fi
 
   local ans
-
   if [[ "$AUTO_UPDATE" == true ]]; then
     ans="y"
     print_info "自动更新模式，确认升级到 ${REMOTE_VER}"
@@ -998,7 +1025,7 @@ change_port() {
   [[ "$NEW_PORT" = "$CUR_PORT" ]] && { print_ok "端口未变更"; pause; return; }
 
   local CUR_ADDR=$(get_conf_addr)
-  [[ -z "$CUR_ADDR" ]] && CUR_ADDR="[::]"
+  [[ -z "$CUR_ADDR" ]] && CUR_ADDR="::0"
   sed -i "s|^listen[[:space:]]*=.*|listen = ${CUR_ADDR}:${NEW_PORT}|" "$CONF_FILE"
   judge "配置更新"
 

@@ -44,6 +44,8 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 
 安装完成会同时输出 IPv4 / IPv6 两条节点行（服务器有哪种就输出哪种）。`reuse` / `ecn` / `tfo` 都是可选优化参数，删掉只保留 `version=6` 也能连通。
 
+安装时填写的“节点名称”会直接作为 Surge 策略名出现在输出行里，例如填 `我家节点` 就输出 `我家节点 = snell, ...`。
+
 ## 与旧版差异
 
 - 官方 v6 仅提供 amd64 / i386 / aarch64，不再有 armv7l

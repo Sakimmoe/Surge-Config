@@ -464,19 +464,24 @@ export_snell_info() {
   MODE=${MODE:-$(cat "$MODE_FILE" 2>/dev/null || echo "default")}
   check_system_ip
 
+  # 节点名称直接作为 Surge 策略名；去掉可能破坏配置行的逗号与换行
+  NAME=$(printf '%s\n' "${NAME:-Snell_${PORT}}" | tr -d ',\r\n')
+  NAME=$(printf '%s' "$NAME" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  [[ -z "$NAME" ]] && NAME="Snell_${PORT}"
+
   # 输出 Surge 节点行：IPv4 和 IPv6 都输出（服务器有哪种就输出哪种）
   local EXTRA="version=6, reuse=true, ecn=true, tfo=true"
   [[ "$MODE" != "default" ]] && EXTRA="version=6, mode=${MODE}, reuse=true, ecn=true, tfo=true"
 
   local LINE4="" LINE6=""
   if [[ -n "$IPV4" ]]; then
-    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE4="${NAME} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -n "$IPV6" ]]; then
-    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE6="${NAME} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -z "$LINE4" && -z "$LINE6" ]]; then
-    LINE4="Snell_${PORT} = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE4="${NAME} = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
 
   {

@@ -11,10 +11,11 @@ Surge-Config/
 │   ├── README.md                           # 模块说明
 │   ├── YouTubeEnhance-Original.sgmodule    # YouTube 去广告原版
 │   └── YouTubeEnhance-WebCompat.sgmodule   # 网页兼容版（电脑可播，手机端可能漏广告）
-└── Snell/
-    ├── README.md                           # Snell 脚本说明
-    ├── snell                               # Snell v5 一键脚本（AnyTLS 风格重写）
-    └── REVIEW.md                           # 审查与变更记录
+├── Snell/
+│   ├── README.md                           # Snell 脚本说明
+│   ├── snell                               # Snell v5 一键脚本（AnyTLS 风格重写）
+│   └── REVIEW.md                           # 审查与变更记录
+└── vendor/                                 # 官方 snell-server 二进制（IPv6 备用下载源）
 ```
 
 ## Surge 主配置

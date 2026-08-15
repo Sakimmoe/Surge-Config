@@ -16,6 +16,8 @@
 - 配置文件权限收紧：`/etc/snell/snell-server.conf` 640（root:nogroup），节点信息 600
 - systemd 增加 User=nobody / Group 回退（CentOS 无 nogroup 时用 nobody）
 - 保留 PSK 16-180 位字符校验、IPv4/IPv6/双栈输出、`--upgrade` 快捷入口
+- 菜单调整：0 = 卸载，9 = 重新应用网络优化 / 调整 Swap，q = 退出
+- 官方下载源无 IPv6：纯 IPv6 服务器自动回退到仓库 `vendor/` 内备份的官方二进制
 
 ## 仍保留的注意事项（继承自 AnyTLS 模板）
 
@@ -25,3 +27,9 @@
 - “检查更新”比较的是脚本内硬编码版本号 v5.0.1，不会在线发现新版本（官方已出 v6 RC）
 - 双栈与仅 IPv6 的 v5 配置写法相同（`listen = ::0`），实际差异取决于服务端实现
 - 设置时区、禁用 systemd-resolved、覆盖 DNS 等属于“代理机专用”的激进改动
+
+## 三种网络模式的配置对照（已按官方文档/示例核对，未在真实服务器实测）
+
+- 仅 IPv4：`listen = 0.0.0.0:端口` + `ipv6 = false`
+- 双栈：`listen = ::0:端口` + `ipv6 = true`（v5 依赖 IPv6 套接字的系统兼容行为同时接受 IPv4）
+- 仅 IPv6：`listen = ::0:端口` + `ipv6 = true`（v5 下可能同时接受 IPv4 映射连接，属官方 v5 限制，v6 已支持多地址监听）

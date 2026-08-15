@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Snell (snell-server) 一键管理脚本：安装/更新/查看/更改端口/更改密码/切换监听模式/卸载
-# 基于官方 snell-server v5 闭源二进制，无证书/TLS 依赖
+# 基于官方 snell-server v6 闭源二进制，无证书/TLS 依赖
 # 搭建方法参考: getsomecat/GetSomeCats 简单搭建Snell服务.md
 # 整体优化与搭建方式套用: Sakimmoe/AnyTLS anytls 脚本
-# 兼容 Debian/Ubuntu/CentOS，支持 amd64 / i386 / aarch64 / armv7l
+# 兼容 Debian/Ubuntu/CentOS，支持 amd64 / i386 / aarch64
 
 set -euo pipefail
 
@@ -18,11 +18,12 @@ CONF_FILE="${CONFIG_DIR}/snell-server.conf"
 LIST_FILE="${CONFIG_DIR}/list"
 CRON_CLEAN="/etc/cron.d/snell-cleanup"
 STACK_FILE="${CONFIG_DIR}/.stack"
+MODE_FILE="${CONFIG_DIR}/.mode"
 NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
-SNELL_VERSION="v5.0.1"
+SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="2.0.0"
+SHELL_VERSION="3.0.0"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -84,7 +85,7 @@ get_local_version() {
   if binary_exists; then
     local raw v
     raw=$(/usr/local/bin/snell-server -v 2>&1 || /usr/local/bin/snell-server --version 2>&1 || /usr/local/bin/snell-server -version 2>&1 || /usr/local/bin/snell-server -V 2>&1 || true)
-    v=$(printf '%s\n' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    v=$(printf '%s\n' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?' | head -1 || true)
     echo "${v:-unknown}"
   else
     echo "未安装"
@@ -92,11 +93,13 @@ get_local_version() {
 }
 
 get_remote_version() {
-  echo "${SNELL_VERSION#v}"
+  # v6.0.0rc2 的二进制 -v 输出为 6.0.0（不带 rc 后缀），这里统一按 6.0.0 比较
+  printf '%s\n' "${SNELL_VERSION#v}" | sed -E 's/rc[0-9]+$//'
 }
 
 install_status_text() {
   local stack_info=""
+  local mode_info=""
   if [[ -f "$STACK_FILE" ]]; then
     local stack=$(cat "$STACK_FILE" 2>/dev/null || echo "")
     case "$stack" in
@@ -105,15 +108,19 @@ install_status_text() {
       v6only) stack_info=" | ${Cyan}仅IPv6${Font}" ;;
     esac
   fi
+  if [[ -f "$MODE_FILE" ]]; then
+    local mode=$(cat "$MODE_FILE" 2>/dev/null || echo "")
+    [[ -n "$mode" ]] && mode_info=" | ${Cyan}模式:${mode}${Font}"
+  fi
 
   if is_installed; then
     if is_active; then
-      echo -e "${BGreen}已安装（运行中）${Font}${stack_info}"
+      echo -e "${BGreen}已安装（运行中）${Font}${stack_info}${mode_info}"
     else
       if systemctl is-failed "$SNELL_SERVICE_NAME" >/dev/null 2>&1; then
-        echo -e "${BYellow}已安装（上次启动失败）${Font}${stack_info}"
+        echo -e "${BYellow}已安装（上次启动失败）${Font}${stack_info}${mode_info}"
       else
-        echo -e "${BYellow}已安装（已停止）${Font}${stack_info}"
+        echo -e "${BYellow}已安装（已停止）${Font}${stack_info}${mode_info}"
       fi
     fi
   else
@@ -167,7 +174,7 @@ read_port_interactive() {
 
 valid_psk() {
   local p="${1:-}"
-  [[ -n "$p" && ${#p} -ge 16 && ${#p} -le 180 && "$p" =~ ^[A-Za-z0-9._+=\/-]+$ ]]
+  [[ -n "$p" && ${#p} -ge 12 && ${#p} -le 255 && "$p" =~ ^[A-Za-z0-9._+=\/-]+$ ]]
 }
 
 read_psk_interactive() {
@@ -182,12 +189,35 @@ read_psk_interactive() {
       pass=${input:-$default}
     fi
     if ! valid_psk "$pass"; then
-      print_warn "密码需 16-180 位，且仅允许字母/数字和 . _ + = / -"
+      print_warn "密码需 12-255 位，且仅允许字母/数字和 . _ + = / -"
       continue
     fi
     echo "$pass"
     break
   done
+}
+
+read_mode_interactive() {
+  local input mode
+  echo ""
+  echo "请选择 Snell v6 协议模式（服务端与客户端必须一致）："
+  echo " 1. default     混淆 + AES 加密（推荐，流量特征随 PSK 变化）"
+  echo " 2. unshaped    仅 AES 加密，无混淆，吞吐约快 10%（特征类似随机流）"
+  echo " 3. unsafe-raw  明文传输，无加密无混淆（仅限内网或已有安全隧道）"
+  while true; do
+    read -rp "请选择 [默认: 1]: " input
+    case "${input:-1}" in
+      1) mode="default"; break ;;
+      2) mode="unshaped"; break ;;
+      3)
+        mode="unsafe-raw"
+        print_warn "unsafe-raw 为明文模式，仅适合内网或已有安全隧道，请谨慎选择"
+        break
+        ;;
+      *) print_warn "无效选项，请输入 1-3" ;;
+    esac
+  done
+  echo "$mode"
 }
 
 get_ip() {
@@ -220,7 +250,6 @@ get_arch() {
     x86_64|amd64) echo "amd64" ;;
     i386|i486|i586|i686|x86) echo "i386" ;;
     aarch64|arm64) echo "aarch64" ;;
-    armv7l) echo "armv7l" ;;
     *) print_err "不支持的架构: $(uname -m)"; exit 1 ;;
   esac
 }
@@ -240,22 +269,52 @@ get_conf_psk() {
   sed -n 's/^psk[[:space:]]*=//p' "$CONF_FILE" 2>/dev/null | tr -d ' \r' | head -1 || true
 }
 
-get_conf_addr() {
-  sed -n 's/^listen[[:space:]]*=\(.*\):[0-9][0-9]*[[:space:]]*$/\1/p' "$CONF_FILE" 2>/dev/null | head -1 || true
+get_conf_mode() {
+  local m
+  m=$(sed -n 's/^mode[[:space:]]*=//p' "$CONF_FILE" 2>/dev/null | tr -d ' \r' | head -1 || true)
+  echo "${m:-default}"
+}
+
+# 生成 v6 的多地址 listen / dns / dns-ip-preference
+make_listen() {
+  local STACK="$1" PORT="$2"
+  case "$STACK" in
+    v4only) echo "0.0.0.0:${PORT}" ;;
+    v6only) echo "[::]:${PORT}" ;;
+    *)      echo "0.0.0.0:${PORT},[::]:${PORT}" ;;
+  esac
+}
+
+make_dns() {
+  local STACK="$1"
+  case "$STACK" in
+    v6only) echo "2606:4700:4700::1111,2001:4860:4860::8888" ;;
+    *)      echo "1.1.1.1,8.8.8.8" ;;
+  esac
+}
+
+make_dns_pref() {
+  local STACK="$1"
+  case "$STACK" in
+    v4only) echo "ipv4-only" ;;
+    v6only) echo "ipv6-only" ;;
+    *)      echo "prefer-ipv4" ;;
+  esac
 }
 
 write_snell_conf() {
-  local PORT="$1" PASS="$2" STACK="$3"
-  local LISTEN_ADDR="::0" ENABLE_IPV6="true"
-  if [[ "$STACK" == "v4only" ]]; then
-    LISTEN_ADDR="0.0.0.0"
-    ENABLE_IPV6="false"
-  fi
+  local PORT="$1" PASS="$2" STACK="$3" MODE="$4"
+  local LISTEN DNS_STR DNS_PREF
+  LISTEN=$(make_listen "$STACK" "$PORT")
+  DNS_STR=$(make_dns "$STACK")
+  DNS_PREF=$(make_dns_pref "$STACK")
   cat > "$CONF_FILE" <<EOF
 [snell-server]
-listen = ${LISTEN_ADDR}:${PORT}
+listen = ${LISTEN}
 psk = ${PASS}
-ipv6 = ${ENABLE_IPV6}
+mode = ${MODE}
+dns = ${DNS_STR}
+dns-ip-preference = ${DNS_PREF}
 EOF
   local GRP
   GRP=$(get_service_group)
@@ -349,7 +408,6 @@ setup_ufw() {
 
   ufw allow "${SSH_PORT}/tcp" comment 'SSH' >/dev/null 2>&1 || true
   ufw allow "${PORT}/tcp" comment 'Snell TCP' >/dev/null 2>&1 || true
-  ufw allow "${PORT}/udp" comment 'Snell UDP' >/dev/null 2>&1 || true
   ufw --force enable >/dev/null 2>&1 || true
   ufw reload >/dev/null 2>&1 || true
   judge "UFW 防火墙配置"
@@ -401,7 +459,8 @@ EOF
 
 # ==================== 导出节点信息 ====================
 export_snell_info() {
-  local PORT="$1" PASS="$2" NAME="$3"
+  local PORT="$1" PASS="$2" NAME="$3" MODE="$4"
+  MODE=${MODE:-$(cat "$MODE_FILE" 2>/dev/null || echo "default")}
   check_system_ip
 
   local STACK_NOW=$(cat "$STACK_FILE" 2>/dev/null || echo "unknown")
@@ -410,13 +469,20 @@ export_snell_info() {
     v4only) STACK_TEXT="仅 IPv4" ;;
     v6only) STACK_TEXT="仅 IPv6" ;;
   esac
+  local MODE_TEXT="default（混淆 + AES）"
+  case "$MODE" in
+    unshaped)   MODE_TEXT="unshaped（仅 AES，约快 10%）" ;;
+    unsafe-raw) MODE_TEXT="unsafe-raw（明文，仅限内网）" ;;
+  esac
 
   local LINE4="" LINE6=""
+  local EXTRA="version=6, reuse=true, ecn=true, tfo=true"
+  [[ "$MODE" != "default" ]] && EXTRA="version=6, mode=${MODE}, reuse=true, ecn=true, tfo=true"
   if [[ -n "$IPV4" ]]; then
-    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true, tfo=true"
+    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -n "$IPV6" ]]; then
-    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true, tfo=true"
+    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
 
   {
@@ -428,6 +494,7 @@ export_snell_info() {
     echo " 端口: ${PORT}"
     echo " 密码: ${PASS}"
     echo " 监听模式: ${STACK_TEXT}"
+    echo " 协议模式: ${MODE_TEXT}"
     echo " snell-server 版本: $(get_local_version)"
     echo "=================================================="
     echo ""
@@ -440,8 +507,9 @@ export_snell_info() {
     fi
     echo ""
     echo " 说明: Snell 协议没有通用 snell:// 链接；"
-    echo " 将上面的 Surge 配置行直接粘贴到 Surge 配置文件即可，"
-    echo " 或在其他客户端中使用 服务器/端口/密码 手动填写（协议版本选择 v5）。"
+    echo " 将上面的 Surge 配置行直接粘贴到 Surge 配置文件即可。"
+    echo " 注意: Snell v6 需要支持 v6 的最新 Surge 测试版；"
+    echo " 服务端与客户端 mode 必须保持一致，PSK 不同则流量特征不同。"
   } > "$LIST_FILE"
   chmod 600 "$LIST_FILE"
 }
@@ -798,6 +866,9 @@ EOF
   read -rp "请输入节点名称 [默认: ${DEF_NAME}]: " input_name
   local NAME=${input_name:-$DEF_NAME}
 
+  local MODE
+  MODE=$(read_mode_interactive)
+
   # 下载 snell-server
   print_info "获取 snell-server ${SNELL_VERSION}..."
   local VER
@@ -812,7 +883,8 @@ EOF
   # 根据栈类型生成配置
   mkdir -p "$CONFIG_DIR"
   echo "$IP_STACK" > "$STACK_FILE"
-  write_snell_conf "$PORT" "$PASS" "$IP_STACK"
+  echo "$MODE" > "$MODE_FILE"
+  write_snell_conf "$PORT" "$PASS" "$IP_STACK" "$MODE"
 
   # systemd（搭建方式参考 GetSomeCats 文档：nobody 运行 + CAP_NET_BIND_SERVICE）
   local SVC_USER="nobody" SVC_GROUP="nogroup"
@@ -874,7 +946,7 @@ EOF
   echo "$NAME" > "$NAME_FILE"
 
   # 导出信息
-  export_snell_info "$PORT" "$PASS" "$NAME"
+  export_snell_info "$PORT" "$PASS" "$NAME" "$MODE"
 
   # 完成
   echo ""
@@ -884,6 +956,7 @@ EOF
   echo -e " snell-server 版本: ${BGreen}$(get_local_version)${Font}"
   echo -e " 监听端口: ${BGreen}${PORT}${Font}"
   echo -e " 节点名称: ${BGreen}${NAME}${Font}"
+  echo -e " 协议模式: ${BGreen}${MODE}${Font}"
   echo ""
   cat "$LIST_FILE"
   hr
@@ -898,6 +971,48 @@ restore_old_binary() {
     chmod +x /usr/local/bin/snell-server
     rm -f /usr/local/bin/snell-server.bak
   fi
+}
+
+# 从 v5（或更早）配置迁移到 v6：多地址 listen + mode + dns-ip-preference
+migrate_conf_to_v6() {
+  local PORT PASS STACK MODE
+  if [[ -f "$CONF_FILE" ]]; then
+    cp -f "$CONF_FILE" "${CONF_FILE}.v5bak"
+  fi
+  if [[ -f "$STACK_FILE" ]]; then
+    cp -f "$STACK_FILE" "${STACK_FILE}.v5bak"
+  fi
+  PORT=$(get_conf_port)
+  [[ -n "$PORT" ]] || PORT=26216
+  PASS=$(get_conf_psk)
+  [[ -n "$PASS" ]] || PASS=$(gen_password)
+
+  STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "dual")
+  if grep -q '^ipv6[[:space:]]*=[[:space:]]*false' "$CONF_FILE" 2>/dev/null; then
+    STACK="v4only"
+  fi
+  case "$STACK" in
+    v4only|v6only) ;;
+    *) STACK="dual" ;;
+  esac
+  MODE="default"
+
+  mkdir -p "$CONFIG_DIR"
+  echo "$STACK" > "$STACK_FILE"
+  echo "$MODE" > "$MODE_FILE"
+  write_snell_conf "$PORT" "$PASS" "$STACK" "$MODE"
+}
+
+restore_old_config() {
+  if [[ -f "${CONF_FILE}.v5bak" ]]; then
+    cp -f "${CONF_FILE}.v5bak" "$CONF_FILE"
+    rm -f "${CONF_FILE}.v5bak"
+  fi
+  if [[ -f "${STACK_FILE}.v5bak" ]]; then
+    cp -f "${STACK_FILE}.v5bak" "$STACK_FILE"
+    rm -f "${STACK_FILE}.v5bak"
+  fi
+  rm -f "$MODE_FILE"
 }
 
 update_snell() {
@@ -980,6 +1095,24 @@ update_snell() {
     return
   fi
 
+  local LOCAL_MAJOR REMOTE_MAJOR NEED_MIGRATE=false
+  LOCAL_MAJOR=$(printf '%s\n' "$LOCAL_VER" | cut -d. -f1)
+  REMOTE_MAJOR=$(printf '%s\n' "$REMOTE_VER" | cut -d. -f1)
+  if [[ "$LOCAL_MAJOR" =~ ^[0-9]+$ && "$REMOTE_MAJOR" =~ ^[0-9]+$ && "$LOCAL_MAJOR" -lt "$REMOTE_MAJOR" ]]; then
+    NEED_MIGRATE=true
+  fi
+  if [[ "$NEED_MIGRATE" == true ]]; then
+    print_info "检测到跨大版本升级，正在把配置迁移到 v6 格式..."
+    if ! migrate_conf_to_v6; then
+      print_err "配置迁移失败，恢复旧版本..."
+      restore_old_binary
+      restore_old_config
+      [[ "$AUTO_UPDATE" != true ]] && pause
+      return
+    fi
+    print_ok "配置已迁移（mode=default，可在菜单 6 中修改）"
+  fi
+
   print_info "重启服务..."
   systemctl restart snell >/dev/null 2>&1 || true
   sleep 2
@@ -987,11 +1120,24 @@ update_snell() {
   if systemctl is-active --quiet snell; then
     print_ok "升级成功！当前版本: $(get_local_version)"
     rm -f /usr/local/bin/snell-server.bak
+    rm -f "${CONF_FILE}.v5bak" "${STACK_FILE}.v5bak"
     cleanup_old
-    [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_local_version)/" "$LIST_FILE"
+    if [[ "$NEED_MIGRATE" == true ]]; then
+      local MPORT MPASS MNAME MMODE
+      MPORT=$(get_conf_port)
+      MPASS=$(get_conf_psk)
+      MNAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
+      MMODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
+      export_snell_info "$MPORT" "$MPASS" "$MNAME" "$MMODE"
+    else
+      [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_local_version)/" "$LIST_FILE"
+    fi
   else
     print_err "新版本启动失败，恢复旧版本..."
     restore_old_binary
+    if [[ "$NEED_MIGRATE" == true ]]; then
+      restore_old_config
+    fi
     systemctl restart snell >/dev/null 2>&1 || true
     sleep 2
     if systemctl is-active --quiet snell; then
@@ -1035,9 +1181,10 @@ change_port() {
 
   [[ "$NEW_PORT" = "$CUR_PORT" ]] && { print_ok "端口未变更"; pause; return; }
 
-  local CUR_ADDR=$(get_conf_addr)
-  [[ -z "$CUR_ADDR" ]] && CUR_ADDR="::0"
-  sed -i "s|^listen[[:space:]]*=.*|listen = ${CUR_ADDR}:${NEW_PORT}|" "$CONF_FILE"
+  local CUR_STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "dual")
+  local NEW_LISTEN
+  NEW_LISTEN=$(make_listen "$CUR_STACK" "$NEW_PORT")
+  sed -i "s|^listen[[:space:]]*=.*|listen = ${NEW_LISTEN}|" "$CONF_FILE"
   judge "配置更新"
 
   setup_ufw "$NEW_PORT"
@@ -1048,7 +1195,8 @@ change_port() {
     print_ok "端口已更新为: ${NEW_PORT}"
     local PASS=$(get_conf_psk)
     local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
-    export_snell_info "$NEW_PORT" "$PASS" "$NAME"
+    local MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
+    export_snell_info "$NEW_PORT" "$PASS" "$NAME" "$MODE"
   else
     print_err "服务重启失败"
   fi
@@ -1084,18 +1232,19 @@ change_password() {
     print_ok "密码已更新"
     local PORT=$(get_conf_port)
     local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
-    export_snell_info "$PORT" "$NEW_PASS" "$NAME"
+    local MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
+    export_snell_info "$PORT" "$NEW_PASS" "$NAME" "$MODE"
   else
     print_err "服务重启失败"
   fi
   pause
 }
 
-# ==================== 切换监听模式 ====================
+# ==================== 切换监听模式 / 协议模式 ====================
 change_mode() {
   clear
   hr
-  print_info "切换 Snell 监听模式"
+  print_info "切换 Snell 监听模式 / 协议模式"
   hr
 
   if ! is_installed; then
@@ -1103,6 +1252,23 @@ change_mode() {
     pause
     return
   fi
+
+  echo " 1. 切换监听模式（IPv4 / 双栈 / IPv6）"
+  echo " 2. 切换协议模式（default / unshaped / unsafe-raw）"
+  local sub
+  read -rp "请选择 [1-2]: " sub
+  case "$sub" in
+    1) change_listen_mode ;;
+    2) change_protocol_mode ;;
+    *) print_warn "无效选项"; pause ;;
+  esac
+}
+
+change_listen_mode() {
+  clear
+  hr
+  print_info "切换 Snell 监听模式"
+  hr
 
   local CUR_STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "unknown")
   local CUR_TEXT="双栈 (IPv6 入站 + IPv4 出站优先)"
@@ -1130,7 +1296,8 @@ change_mode() {
   local PORT=$(get_conf_port)
   local PASS=$(get_conf_psk)
   local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
-  write_snell_conf "$PORT" "$PASS" "$NEW_STACK"
+  local MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
+  write_snell_conf "$PORT" "$PASS" "$NEW_STACK" "$MODE"
   echo "$NEW_STACK" > "$STACK_FILE"
   judge "配置更新"
 
@@ -1138,7 +1305,58 @@ change_mode() {
   sleep 1
   if is_active; then
     print_ok "监听模式已切换"
-    export_snell_info "$PORT" "$PASS" "$NAME"
+    export_snell_info "$PORT" "$PASS" "$NAME" "$MODE"
+  else
+    print_err "服务重启失败"
+  fi
+  pause
+}
+
+change_protocol_mode() {
+  clear
+  hr
+  print_info "切换 Snell 协议模式（服务端与客户端必须一致）"
+  hr
+
+  local CUR_MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
+  local CUR_TEXT="default（混淆 + AES）"
+  case "$CUR_MODE" in
+    unshaped)   CUR_TEXT="unshaped（仅 AES，约快 10%）" ;;
+    unsafe-raw) CUR_TEXT="unsafe-raw（明文，仅限内网）" ;;
+  esac
+
+  echo -e "当前模式: ${BGreen}${CUR_TEXT}${Font}"
+  echo " 1. default     混淆 + AES 加密（推荐）"
+  echo " 2. unshaped    仅 AES 加密，无混淆，吞吐约快 10%"
+  echo " 3. unsafe-raw  明文传输，仅限内网或已有安全隧道"
+  local input
+  read -rp "请选择 [1-3]: " input
+  local NEW_MODE=""
+  case "$input" in
+    1) NEW_MODE="default" ;;
+    2) NEW_MODE="unshaped" ;;
+    3)
+      NEW_MODE="unsafe-raw"
+      print_warn "unsafe-raw 为明文模式，仅适合内网或已有安全隧道，请谨慎选择"
+      ;;
+    *) print_warn "无效选项"; pause; return ;;
+  esac
+
+  [[ "$NEW_MODE" = "$CUR_MODE" ]] && { print_ok "模式未变更"; pause; return; }
+
+  local PORT=$(get_conf_port)
+  local PASS=$(get_conf_psk)
+  local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
+  local STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "dual")
+  write_snell_conf "$PORT" "$PASS" "$STACK" "$NEW_MODE"
+  echo "$NEW_MODE" > "$MODE_FILE"
+  judge "配置更新"
+
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 1
+  if is_active; then
+    print_ok "协议模式已切换"
+    export_snell_info "$PORT" "$PASS" "$NAME" "$NEW_MODE"
   else
     print_err "服务重启失败"
   fi
@@ -1218,7 +1436,7 @@ main() {
     echo -e "${Cyan} 3. 查看节点配置${Font}"
     echo -e "${Cyan} 4. 更改端口${Font}"
     echo -e "${Cyan} 5. 更改密码${Font}"
-    echo -e "${Cyan} 6. 切换监听模式${Font}"
+    echo -e "${Cyan} 6. 切换监听模式 / 协议模式${Font}"
     echo -e "${Cyan} 7. 重启服务${Font}"
     echo -e "${Cyan} 8. 查看运行状态${Font}"
     echo -e "${Cyan} 9. 重新应用网络优化 / 调整 Swap${Font}"

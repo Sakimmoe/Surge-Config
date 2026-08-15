@@ -36,6 +36,8 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 
 服务端与客户端的 mode 必须一致。Snell v6 目前是测试版，客户端需要支持 v6 的最新 Surge 测试版。
 
+安装完成会同时输出 IPv4 / IPv6 两条节点行（服务器有哪种就输出哪种）。`reuse` / `ecn` / `tfo` 都是可选优化参数，删掉只保留 `version=6` 也能连通。
+
 ## 与旧版差异
 
 - 官方 v6 仅提供 amd64 / i386 / aarch64，不再有 armv7l

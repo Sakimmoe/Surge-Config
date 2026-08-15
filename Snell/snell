@@ -23,7 +23,7 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="3.0.3"
+SHELL_VERSION="3.0.4"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -464,20 +464,25 @@ export_snell_info() {
   MODE=${MODE:-$(cat "$MODE_FILE" 2>/dev/null || echo "default")}
   check_system_ip
 
-  # 只输出一条 Surge 节点行：优先 IPv4，没有 IPv4 时用 IPv6
+  # 输出 Surge 节点行：IPv4 和 IPv6 都输出（服务器有哪种就输出哪种）
   local EXTRA="version=6, reuse=true, ecn=true, tfo=true"
   [[ "$MODE" != "default" ]] && EXTRA="version=6, mode=${MODE}, reuse=true, ecn=true, tfo=true"
 
-  local LINE=""
+  local LINE4="" LINE6=""
   if [[ -n "$IPV4" ]]; then
-    LINE="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
-  elif [[ -n "$IPV6" ]]; then
-    LINE="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
-  else
-    LINE="Snell_${PORT} = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
+  fi
+  if [[ -n "$IPV6" ]]; then
+    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
+  fi
+  if [[ -z "$LINE4" && -z "$LINE6" ]]; then
+    LINE4="Snell_${PORT} = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
 
-  printf '%s\n' "$LINE" > "$LIST_FILE"
+  {
+    [[ -n "$LINE4" ]] && printf '%s\n' "$LINE4"
+    [[ -n "$LINE6" ]] && printf '%s\n' "$LINE6"
+  } > "$LIST_FILE"
   chmod 600 "$LIST_FILE"
 }
 

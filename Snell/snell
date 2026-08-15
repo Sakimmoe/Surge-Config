@@ -23,7 +23,7 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="3.0.5"
+SHELL_VERSION="0.0.9"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 

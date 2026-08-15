@@ -16,8 +16,9 @@
 - 配置文件权限收紧：`/etc/snell/snell-server.conf` 640（root:nogroup），节点信息 600
 - systemd 增加 User=nobody / Group 回退（CentOS 无 nogroup 时用 nobody）
 - 保留 PSK 16-180 位字符校验、IPv4/IPv6/双栈输出、`--upgrade` 快捷入口
-- 菜单调整：0 = 卸载，9 = 重新应用网络优化 / 调整 Swap，q = 退出
+- 菜单：9 = 卸载，10 = 重新应用网络优化 / 调整 Swap，0 = 退出
 - 官方下载源无 IPv6：纯 IPv6 服务器自动回退到仓库 `vendor/` 内备份的官方二进制
+- 架构支持补齐：amd64 / i386 / aarch64 / armv7l 自动选择（`uname -m` 自动匹配）
 
 ## 仍保留的注意事项（继承自 AnyTLS 模板）
 

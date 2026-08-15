@@ -3,7 +3,7 @@
 # 基于官方 snell-server v5 闭源二进制，无证书/TLS 依赖
 # 搭建方法参考: getsomecat/GetSomeCats 简单搭建Snell服务.md
 # 整体优化与搭建方式套用: Sakimmoe/AnyTLS anytls 脚本
-# 兼容 Debian/Ubuntu/CentOS，支持 amd64 / aarch64
+# 兼容 Debian/Ubuntu/CentOS，支持 amd64 / i386 / aarch64 / armv7l
 
 set -euo pipefail
 
@@ -218,7 +218,9 @@ check_system_ip() {
 get_arch() {
   case "$(uname -m)" in
     x86_64|amd64) echo "amd64" ;;
+    i386|i486|i586|i686|x86) echo "i386" ;;
     aarch64|arm64) echo "aarch64" ;;
+    armv7l) echo "armv7l" ;;
     *) print_err "不支持的架构: $(uname -m)"; exit 1 ;;
   esac
 }
@@ -1219,11 +1221,11 @@ main() {
     echo -e "${Cyan} 6. 切换监听模式${Font}"
     echo -e "${Cyan} 7. 重启服务${Font}"
     echo -e "${Cyan} 8. 查看运行状态${Font}"
-    echo -e "${Cyan} 9. 重新应用网络优化 / 调整 Swap${Font}"
-    echo -e "${Cyan} 0. 卸载 Snell${Font}"
-    echo -e "${Cyan} q. 退出${Font}"
+    echo -e "${Cyan} 9. 卸载 Snell${Font}"
+    echo -e "${Cyan} 10. 重新应用网络优化 / 调整 Swap${Font}"
+    echo -e "${Cyan} 0. 退出${Font}"
     hr
-    read -rp "请输入选项 [0-9/q]: " choice
+    read -rp "请输入数字 [0-10]: " choice
 
     case "$choice" in
       1) install_snell ;;
@@ -1234,9 +1236,9 @@ main() {
       6) change_mode ;;
       7) restart_service ;;
       8) status_service ;;
-      9) apply_network_optimization; setup_swap; create_shortcut ;;
-      0) uninstall_snell ;;
-      q|Q) exit 0 ;;
+      9) uninstall_snell ;;
+      10) apply_network_optimization; setup_swap; create_shortcut ;;
+      0) exit 0 ;;
       *) print_warn "无效选项"; sleep 1 ;;
     esac
   done

@@ -23,7 +23,7 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="3.0.1"
+SHELL_VERSION="3.0.2"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -50,8 +50,8 @@ INFO="${Cyan}[INFO]${Font}"
 
 print_ok()  { echo -e "${OK}${Blue} $1 ${Font}"; }
 print_info(){ echo -e "${INFO}${Cyan} $1 ${Font}"; }
-print_warn(){ echo -e "${WARN}${Yellow} $1 ${Font}"; }
-print_err() { echo -e "${ERROR} ${BRed}$1${Font}"; }
+print_warn(){ echo -e "${WARN}${Yellow} $1 ${Font}" >&2; }
+print_err() { echo -e "${ERROR} ${BRed}$1${Font}" >&2; }
 
 judge() {
   if [[ $? -eq 0 ]]; then
@@ -199,13 +199,14 @@ read_psk_interactive() {
 
 read_mode_interactive() {
   local input mode
-  echo ""
-  echo "请选择 Snell v6 协议模式（服务端与客户端必须一致）："
-  echo " 1. default     混淆 + AES 加密（推荐，流量特征随 PSK 变化）"
-  echo " 2. unshaped    仅 AES 加密，无混淆，吞吐约快 10%（特征类似随机流）"
-  echo " 3. unsafe-raw  明文传输，无加密无混淆（仅限内网或已有安全隧道）"
+  # 该函数在 $( ) 中调用，菜单必须输出到 stderr 才会显示
+  echo "" >&2
+  echo "请选择 Snell v6 协议模式（服务端与客户端必须一致）：" >&2
+  echo " 1. default     混淆 + AES 加密（推荐，流量特征随 PSK 变化）" >&2
+  echo " 2. unshaped    仅 AES 加密，无混淆，吞吐约快 10%（特征类似随机流）" >&2
+  echo " 3. unsafe-raw  明文传输，无加密无混淆（仅限内网或已有安全隧道）" >&2
   while true; do
-    read -rp "请选择 [默认: 1]: " input
+    read -rp "请选择协议模式 [1=default / 2=unshaped / 3=unsafe-raw，回车默认 1]: " input
     case "${input:-1}" in
       1) mode="default"; break ;;
       2) mode="unshaped"; break ;;

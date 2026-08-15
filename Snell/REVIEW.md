@@ -1,5 +1,11 @@
 # Snell 脚本审查与变更记录
 
+## v3.0.2（修复模式选择菜单不显示）
+
+- 修复安装时“协议模式”选项不显示：该函数在 `$( )` 中调用，原先把菜单输出到 stdout 会被命令替换吞掉，只剩 `read -rp` 的提示符
+- 菜单与警告改为输出到 stderr，并把选项写进提示行：`[1=default / 2=unshaped / 3=unsafe-raw，回车默认 1]`
+- `print_warn` / `print_err` 统一输出到 stderr，避免在命令替换中调用时提示不可见
+
 ## v3.0.1（s 快捷命令）
 
 - 脚本入口在进入主菜单前先执行 `create_shortcut`，因此只要运行过一次 `bash <(curl -sL ...)`，即使没有安装 Snell，也会留下 `/usr/local/bin/s`

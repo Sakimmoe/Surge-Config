@@ -24,6 +24,8 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 
 脚本已移除在线更新功能。官方发布新版本后，完整升级教程（改脚本版本号与 vendor 备用源 → 推送仓库 → 服务器重装）见 [UPDATE.md](UPDATE.md)。
 
+想直接让 AI 帮忙升级，把 [AI_UPDATE.md](AI_UPDATE.md) 的内容整段发给 AI 即可。
+
 ## 日志与清理
 
 - Snell 日志写入 systemd journal，服务以 `--loglevel warning` 运行，日常日志量很小

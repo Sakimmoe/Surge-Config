@@ -14,6 +14,7 @@ Surge-Config/
 ├── Snell/
 │   ├── README.md                           # Snell 脚本说明
 │   ├── UPDATE.md                           # 版本升级教程
+│   ├── AI_UPDATE.md                        # AI 升级任务说明
 │   ├── REVIEW.md                           # 审查与变更记录
 │   └── snell                               # Snell v6 一键脚本
 └── vendor/                                 # 官方 snell-server 二进制（IPv6 备用下载源）

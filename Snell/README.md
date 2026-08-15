@@ -1,7 +1,3 @@
-# Snell 一键脚本
-
-Snell v5 一键安装/管理脚本，搭建方法参考 [getsomecat/GetSomeCats - 简单搭建Snell服务](https://github.com/getsomecat/GetSomeCats/blob/Surge/%E7%AE%80%E5%8D%95%E6%90%AD%E5%BB%BASnell%E6%9C%8D%E5%8A%A1.md)，整体优化与搭建方式套用 [Sakimmoe/AnyTLS - anytls](https://github.com/Sakimmoe/AnyTLS/blob/main/anytls)。
-
 ## 快速开始
 
 ```bash

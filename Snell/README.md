@@ -20,44 +20,9 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 10. 卸载
 0. 退出
 
-## 手动更新 Snell（服务端）
+## 升级 Snell 版本
 
-脚本不再提供在线更新，官方发布新版本后手动操作：
-
-```bash
-# 1. 停止服务并备份
-systemctl stop snell
-cp /usr/local/bin/snell-server /root/snell-server.bak
-cp /etc/snell/snell-server.conf /root/snell-server.conf.bak
-
-# 2. 从官方发布页下载新版（按架构选，例如 amd64）
-curl -fLO https://dl.nssurge.com/snell/snell-server-v6.0.0rc3-linux-amd64.zip
-
-# 3. 解压并替换二进制
-unzip -o snell-server-v6.0.0rc3-linux-amd64.zip -d /tmp/snell-new
-cp /tmp/snell-new/snell-server /usr/local/bin/snell-server
-chmod +x /usr/local/bin/snell-server
-
-# 4. 官方说明有变才改配置，保持 listen / psk / mode / dns / dns-ip-preference
-nano /etc/snell/snell-server.conf
-
-# 5. 启动并验证
-systemctl start snell
-systemctl status snell --no-pager
-ss -tlnp | grep snell
-journalctl -u snell -n 30 --no-pager
-```
-
-失败回滚：
-
-```bash
-systemctl stop snell
-cp /root/snell-server.bak /usr/local/bin/snell-server
-cp /root/snell-server.conf.bak /etc/snell/snell-server.conf
-systemctl start snell
-```
-
-如果同时要更新仓库里的 `vendor/` 备用源（纯 IPv6 服务器下载用）：把三个架构的新 zip 放进 `vendor/`、改 `SNELL_VERSION`、更新下面的 SHA256 并推送。
+脚本已移除在线更新功能。官方发布新版本后，完整升级教程（改脚本版本号与 vendor 备用源 → 推送仓库 → 服务器重装）见 [UPDATE.md](UPDATE.md)。
 
 ## 日志与清理
 

@@ -1,5 +1,10 @@
 # Snell 脚本审查与变更记录
 
+## 新增 UPDATE.md 升级教程
+
+- 按需求新增 `Snell/UPDATE.md`：仓库端改 `SNELL_VERSION`、替换 `vendor/`、更新 SHA256、按需修改配置生成函数 → 推送 → 服务器菜单 1 重装
+- README 里原来的“手动更新 Snell（服务端）”替换为指向 UPDATE.md 的入口
+
 ## 移除更新功能（改为手动更新）
 
 - 删除菜单 2「更新」、`--upgrade` 入口、`update_snell` / v5→v6 迁移 / 回滚函数、`snell -v/--upgrade` 快捷参数

@@ -1,0 +1,25 @@
+#!name=Youtube (Music) Enhance（网页兼容版）
+#!desc=适用于 Youtube & Youtube Music。基于原版修改：不再 MITM googlevideo.com，电脑网页端通过手机 Surge 共享代理播放 YouTube 视频时不再受影响；手机 App 端去广告、屏蔽按钮、翻译等功能保持可用（广告流兜底拦截已移除，极少数广告可能漏出）
+#!arguments=屏蔽上传按钮:true,屏蔽选段按钮:true,屏蔽Shorts按钮:false,字幕翻译语言:off,歌词翻译语言:off,启用调试模式:false
+#!arguments-desc=- 屏蔽参数：[true, false] \n- 翻译参数：[语言代码, off] \n\n1. 语言代码遵循 Google Translate Languages Codes, 当填入 off 时关闭翻译\n2. 开启调试模式用于输出更多日志
+
+# > Note
+# 原版模块会 MITM *.googlevideo.com，用于拦截 App 内的广告流（initplayback...&oad）
+# 但电脑通过手机 Surge 共享代理访问时，Windows 不信任 Surge 的证书，视频流解密失败导致一直转圈
+# 本版本移除了 googlevideo.com 的 MITM 和广告流拦截，网页端恢复正常播放
+# 手机 App 端仍由 youtubei 响应脚本移除广告，主要去广告能力不受影响
+# 若以后电脑也安装了 Surge 证书，想恢复完整广告流拦截，可换回原版模块
+
+[Rule]
+# 原版规则：AND,((DOMAIN-SUFFIX,googlevideo.com), (PROTOCOL,UDP)),REJECT
+AND,((DOMAIN,youtubei.googleapis.com), (PROTOCOL,UDP)),REJECT
+
+[Script]
+youtube.response = type=http-response,pattern=^https:\/\/youtubei\.googleapis\.com\/(youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch))(\?(.*))?$,requires-body=1,max-size=-1,binary-body-mode=1,script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.response.js,argument="{"lyricLang":"{{{歌词翻译语言}}}","captionLang":"{{{字幕翻译语言}}}","blockUpload":{{{屏蔽上传按钮}}},"blockImmersive":{{{屏蔽选段按钮}}},"blockShorts":{{{屏蔽Shorts按钮}}},"debug":{{{启用调试模式}}}}"
+
+# 原版广告流兜底拦截（依赖 googlevideo MITM，本版本已禁用）
+# [Map Local]
+# ^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback.+&oad data-type=text data="" status-code=200
+
+[MITM]
+hostname = %APPEND% youtubei.googleapis.com

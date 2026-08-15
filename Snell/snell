@@ -1,0 +1,1223 @@
+#!/usr/bin/env bash
+# Snell (snell-server) 一键管理脚本：安装/更新/查看/更改端口/更改密码/切换监听模式/卸载
+# 基于官方 snell-server 闭源二进制，无证书/TLS 依赖
+# 智能双栈：IPv6 入站 + IPv4 出站优先 / 单栈自适应
+# 兼容 Debian/Ubuntu/CentOS，支持 amd64 / aarch64
+
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+# ==================== 配置路径 ====================
+CONFIG_DIR="/etc/snell"
+WORK_DIR="$CONFIG_DIR"
+SNELL_SERVICE_NAME="snell.service"
+SNELL_SERVICE_FILE="/etc/systemd/system/${SNELL_SERVICE_NAME}"
+CONF_FILE="${CONFIG_DIR}/snell-server.conf"
+LIST_FILE="${CONFIG_DIR}/list"
+CRON_CLEAN="/etc/cron.d/snell-cleanup"
+STACK_FILE="${CONFIG_DIR}/.stack"
+NAME_FILE="${CONFIG_DIR}/.name"
+NET_NOFILE_LIMIT=1048576
+SNELL_VERSION="v5.0.1"
+TZ_DEFAULT="Asia/Shanghai"
+SHELL_VERSION="1.1.4"
+# 可选：如果将本脚本托管在 GitHub/Gist 等位置，在此填入 Raw 链接，在线一键安装时也能自动下载面板
+SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Snell/main/snell"
+
+# ==================== 颜色配置 ====================
+Font="\033[0m"
+Black="\033[30m"
+Red="\033[31m"
+Green="\033[32m"
+Yellow="\033[33m"
+Blue="\033[34m"
+Magenta="\033[35m"
+Cyan="\033[36m"
+White="\033[37m"
+BRed="\033[91m"
+BGreen="\033[92m"
+BYellow="\033[93m"
+BCyan="\033[96m"
+Bold="\033[1m"
+
+OK="${Green}[OK]${Font}"
+ERROR="${Red}[ERROR]${Font}"
+WARN="${Yellow}[WARN]${Font}"
+INFO="${Cyan}[INFO]${Font}"
+
+print_ok()  { echo -e "${OK}${Blue} $1 ${Font}"; }
+print_info(){ echo -e "${INFO}${Cyan} $1 ${Font}"; }
+print_warn(){ echo -e "${WARN}${Yellow} $1 ${Font}"; }
+print_err() { echo -e "${ERROR} ${BRed}$1${Font}"; }
+
+judge() {
+  if [[ $? -eq 0 ]]; then
+    print_ok "$1 完成"
+    sleep 0.5
+  else
+    print_err "$1 失败"
+    exit 1
+  fi
+}
+
+hr() { printf '%*s\n' 50 '' | tr ' ' '='; }
+
+pause() { read -rp "按回车返回菜单..." _; }
+
+ensure_root() {
+  if [[ $EUID -ne 0 ]]; then
+    clear
+    print_err "必须使用 root 运行本脚本!"
+    exit 1
+  fi
+}
+
+# ==================== 状态检测 ====================
+binary_exists() { [[ -x /usr/local/bin/snell-server ]]; }
+service_exists() { [[ -f "$SNELL_SERVICE_FILE" ]]; }
+is_installed()   { binary_exists || service_exists; }
+is_active()      { systemctl is-active "$SNELL_SERVICE_NAME" >/dev/null 2>&1; }
+
+get_local_version() {
+  if binary_exists; then
+    local raw v
+    raw=$(/usr/local/bin/snell-server -v 2>&1 || /usr/local/bin/snell-server --version 2>&1 || /usr/local/bin/snell-server -version 2>&1 || /usr/local/bin/snell-server -V 2>&1 || true)
+    v=$(printf '%s\n' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    echo "${v:-unknown}"
+  else
+    echo "未安装"
+  fi
+}
+
+get_remote_version() {
+  echo "${SNELL_VERSION#v}"
+}
+
+install_status_text() {
+  local stack_info=""
+  if [[ -f "$STACK_FILE" ]]; then
+    local stack=$(cat "$STACK_FILE" 2>/dev/null || echo "")
+    case "$stack" in
+      dual)   stack_info=" | ${Cyan}双栈(ipv6入+ipv4出优先)${Font}" ;;
+      v4only) stack_info=" | ${Cyan}仅IPv4${Font}" ;;
+      v6only) stack_info=" | ${Cyan}仅IPv6${Font}" ;;
+    esac
+  fi
+
+  if is_installed; then
+    if is_active; then
+      echo -e "${BGreen}已安装（运行中）${Font}${stack_info}"
+    else
+      if systemctl is-failed "$SNELL_SERVICE_NAME" >/dev/null 2>&1; then
+        echo -e "${BYellow}已安装（上次启动失败）${Font}${stack_info}"
+      else
+        echo -e "${BYellow}已安装（已停止）${Font}${stack_info}"
+      fi
+    fi
+  else
+    echo -e "${BRed}未安装${Font}"
+  fi
+}
+
+# ==================== 工具函数 ====================
+random_port() { shuf -i 2000-65000 -n 1; }
+gen_password(){ cat /proc/sys/kernel/random/uuid; }
+
+valid_port() {
+  local p="${1:-}"
+  [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 ))
+}
+
+is_port_used() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -tuln | awk '{print $5}' | grep -Eq "[:.]${port}([[:space:]]|$)"
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -i :"$port" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+read_port_interactive() {
+  local input current="${2:-}"
+  while true; do
+    if [[ -n "$current" ]]; then
+      read -rp "回车保持当前端口 [${current}]，或输入新端口(1-65535): " input
+      [[ -z "$input" ]] && { echo "$current"; return; }
+    else
+      read -t 15 -rp "回车或等待15秒为随机端口，或输入端口(1-65535): " input || true
+      [[ -z "$input" ]] && input=$(random_port)
+    fi
+
+    if ! valid_port "$input"; then
+      print_warn "端口不合法：$input"
+      continue
+    fi
+    if is_port_used "$input"; then
+      print_warn "端口 $input 已被占用"
+      continue
+    fi
+    echo "$input"
+    break
+  done
+}
+
+valid_psk() {
+  local p="${1:-}"
+  [[ -n "$p" && ${#p} -ge 16 && ${#p} -le 180 && "$p" =~ ^[A-Za-z0-9._+=\/-]+$ ]]
+}
+
+read_psk_interactive() {
+  local current="${1:-}" default="${2:-}" input pass
+  while true; do
+    if [[ -n "$current" ]]; then
+      read -rp "请输入新密码（回车保持原密码）[当前: ${current}]: " input
+      [[ -z "$input" ]] && { echo "$current"; return; }
+      pass="$input"
+    else
+      read -rp "请输入 Snell 密码（回车使用随机密码）[默认: ${default}]: " input
+      pass=${input:-$default}
+    fi
+    if ! valid_psk "$pass"; then
+      print_warn "密码需 16-180 位，且仅允许字母/数字和 . _ + = / -"
+      continue
+    fi
+    echo "$pass"
+    break
+  done
+}
+
+get_ip() {
+  local ip4 ip6
+  ip4=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+  [[ -n "$ip4" ]] && { echo "$ip4"; return; }
+  ip6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org 2>/dev/null || true)
+  [[ -n "$ip6" ]] && { echo "$ip6"; return; }
+  echo "未知"
+}
+
+check_system_ip() {
+  IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+  IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org 2>/dev/null || echo "")
+  MAIN_IP=$([ -n "$IPV4" ] && echo "$IPV4" || echo "$IPV6")
+
+  if [[ -n "$IPV4" && -n "$IPV6" ]]; then
+    IP_STACK="dual"
+  elif [[ -n "$IPV4" ]]; then
+    IP_STACK="v4only"
+  elif [[ -n "$IPV6" ]]; then
+    IP_STACK="v6only"
+  else
+    IP_STACK="unknown"
+  fi
+}
+
+get_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "aarch64" ;;
+    *) print_err "不支持的架构: $(uname -m)"; exit 1 ;;
+  esac
+}
+
+# ==================== 配置文件读写 ====================
+get_conf_port() {
+  sed -n 's/^listen[[:space:]]*=.*:\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$CONF_FILE" 2>/dev/null | head -1 || true
+}
+
+get_conf_psk() {
+  sed -n 's/^psk[[:space:]]*=//p' "$CONF_FILE" 2>/dev/null | tr -d ' \r' | head -1 || true
+}
+
+get_conf_addr() {
+  sed -n 's/^listen[[:space:]]*=\(.*\):[0-9][0-9]*[[:space:]]*$/\1/p' "$CONF_FILE" 2>/dev/null | head -1 || true
+}
+
+write_snell_conf() {
+  local PORT="$1" PASS="$2" STACK="$3"
+  local LISTEN_ADDR="[::]" ENABLE_IPV6="true"
+  if [[ "$STACK" == "v4only" ]]; then
+    LISTEN_ADDR="0.0.0.0"
+    ENABLE_IPV6="false"
+  fi
+  cat > "$CONF_FILE" <<EOF
+[snell-server]
+listen = ${LISTEN_ADDR}:${PORT}
+psk = ${PASS}
+ipv6 = ${ENABLE_IPV6}
+EOF
+}
+
+# ==================== 下载 snell-server ====================
+download_snell() {
+  local DEST_BIN="${1:-/usr/local/bin/snell-server}"
+  local TMP_DL=$(mktemp -d /tmp/snell-dl.XXXXXX)
+  local URL FILE TMP_BIN
+  URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip"
+
+  wget --timeout=30 -q -O "${TMP_DL}/snell-server.pkg" "$URL" || {
+    rm -rf "$TMP_DL"
+    return 1
+  }
+
+  unzip -q -o "${TMP_DL}/snell-server.pkg" -d "${TMP_DL}" || {
+    rm -rf "$TMP_DL"
+    return 1
+  }
+
+  FILE=$(find "${TMP_DL}" -type f -name "snell-server" | head -1 || true)
+  if [[ -z "$FILE" ]]; then
+    rm -rf "$TMP_DL"
+    return 1
+  fi
+
+  TMP_BIN="${DEST_BIN}.tmp.$$"
+  if ! cp "$FILE" "$TMP_BIN"; then
+    rm -rf "$TMP_DL" "$TMP_BIN"
+    return 1
+  fi
+  if ! chmod +x "$TMP_BIN"; then
+    rm -rf "$TMP_DL" "$TMP_BIN"
+    return 1
+  fi
+  if ! mv -f "$TMP_BIN" "$DEST_BIN"; then
+    rm -rf "$TMP_DL" "$TMP_BIN"
+    return 1
+  fi
+  rm -rf "$TMP_DL"
+  echo "${SNELL_VERSION#v}"
+}
+
+# ==================== 清理垃圾 ====================
+cleanup_old() {
+  rm -f /usr/local/bin/snell-server.bak
+  rm -f /usr/local/bin/snell-server.tmp.*
+  rm -f "${CONFIG_DIR}"/*.tmp 2>/dev/null || true
+  rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip 2>/dev/null || true
+  apt-get clean >/dev/null 2>&1 || true
+}
+
+# ==================== 防火墙配置 ====================
+setup_ufw() {
+  local PORT="$1"
+  if ! command -v ufw >/dev/null 2>&1; then
+    print_warn "未安装 UFW，跳过防火墙配置；请手动放行端口 ${PORT}/tcp"
+    return 0
+  fi
+  print_info "配置防火墙 (UFW)..."
+  systemctl unmask ufw >/dev/null 2>&1 || true
+  systemctl enable --now ufw >/dev/null 2>&1 || true
+  if [[ -f /etc/default/ufw ]]; then
+    sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw 2>/dev/null || true
+  fi
+  ufw --force reset >/dev/null 2>&1 || true
+  ufw default deny incoming >/dev/null 2>&1 || true
+  ufw default allow outgoing >/dev/null 2>&1 || true
+
+  local SSH_PORT=22
+  if [[ -f /etc/ssh/sshd_config ]]; then
+    SSH_PORT=$(grep -Ei '^\s*Port\s+' /etc/ssh/sshd_config | head -1 | awk '{print $2}' | tr -d '\r\n' || true)
+  fi
+  if [[ -z "$SSH_PORT" ]] && [[ -d /etc/ssh/sshd_config.d ]]; then
+    SSH_PORT=$(grep -Ei '^\s*Port\s+' /etc/ssh/sshd_config.d/*.conf 2>/dev/null | head -1 | awk '{print $2}' | tr -d '\r\n' || true)
+  fi
+  [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || SSH_PORT=22
+
+  ufw allow "${SSH_PORT}/tcp" comment 'SSH' >/dev/null 2>&1 || true
+  ufw allow "${PORT}/tcp" comment 'Snell TCP' >/dev/null 2>&1 || true
+  ufw allow "${PORT}/udp" comment 'Snell UDP' >/dev/null 2>&1 || true
+  ufw --force enable >/dev/null 2>&1 || true
+  ufw reload >/dev/null 2>&1 || true
+  judge "UFW 防火墙配置"
+}
+
+# ==================== 定时任务 ====================
+setup_cron() {
+  local CLEAN_SCRIPT="/usr/local/bin/snell-cleanup.sh"
+
+  cat > "$CLEAN_SCRIPT" <<'EOF'
+#!/bin/bash
+
+set -e
+
+# apt 缓存与残留依赖
+apt-get clean >/dev/null 2>&1 || true
+apt-get autoclean -y >/dev/null 2>&1 || true
+apt-get autoremove -y >/dev/null 2>&1 || true
+
+# systemd 日志：保留最近 7 天且总大小不超过 50M
+journalctl --vacuum-time=7d --vacuum-size=50M >/dev/null 2>&1 || true
+
+# 临时文件：只删 7 天以上的普通文件，再删 7 天以上的空目录，避免误删里面还有新文件的目录
+find /tmp /var/tmp -mindepth 1 -type f -mtime +7 -delete >/dev/null 2>&1 || true
+find /tmp /var/tmp -mindepth 1 -type d -mtime +7 -empty -delete >/dev/null 2>&1 || true
+
+# snell-server 更新残留
+rm -f /usr/local/bin/snell-server.bak >/dev/null 2>&1 || true
+rm -f /usr/local/bin/snell-server.tmp.* >/dev/null 2>&1 || true
+rm -f /etc/snell/*.tmp >/dev/null 2>&1 || true
+rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip >/dev/null 2>&1 || true
+
+# 清理 systemd 失败状态
+systemctl reset-failed >/dev/null 2>&1 || true
+
+exit 0
+EOF
+
+  chmod +x "$CLEAN_SCRIPT"
+
+  cat > "$CRON_CLEAN" <<EOF
+7 7 * * 0 root $CLEAN_SCRIPT >/dev/null 2>&1
+EOF
+
+  chmod 644 "$CRON_CLEAN"
+
+  judge "定时任务配置"
+}
+
+# ==================== 导出节点信息 ====================
+export_snell_info() {
+  local PORT="$1" PASS="$2" NAME="$3"
+  check_system_ip
+
+  local STACK_NOW=$(cat "$STACK_FILE" 2>/dev/null || echo "unknown")
+  local STACK_TEXT="双栈 (IPv6 入站 + IPv4 出站优先)"
+  case "$STACK_NOW" in
+    v4only) STACK_TEXT="仅 IPv4" ;;
+    v6only) STACK_TEXT="仅 IPv6" ;;
+  esac
+
+  local LINE4="" LINE6=""
+  if [[ -n "$IPV4" ]]; then
+    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true"
+  fi
+  if [[ -n "$IPV6" ]]; then
+    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, version=5, reuse=true, ecn=true"
+  fi
+
+  {
+    echo "=========== Snell (snell-server) 配置参数 ==========="
+    echo " 节点名称: ${NAME}"
+    echo " 服务器: ${MAIN_IP:-未知}"
+    echo " IPv4: ${IPV4:-无}"
+    echo " IPv6: ${IPV6:-无}"
+    echo " 端口: ${PORT}"
+    echo " 密码: ${PASS}"
+    echo " 监听模式: ${STACK_TEXT}"
+    echo " snell-server 版本: $(get_local_version)"
+    echo "=================================================="
+    echo ""
+    echo " Surge 配置:"
+    if [[ -n "$LINE4" ]]; then
+      echo " ${LINE4}"
+    fi
+    if [[ -n "$LINE6" ]]; then
+      echo " ${LINE6}"
+    fi
+    echo ""
+    echo " 说明: Snell 协议没有通用 snell:// 链接；"
+    echo " 将上面的 Surge 配置行直接粘贴到 Surge 配置文件即可，"
+    echo " 或在其他客户端中使用 服务器/端口/密码 手动填写（协议版本选择 v5）。"
+  } > "$LIST_FILE"
+}
+
+# ==================== 快捷命令配置 ====================
+create_shortcut() {
+  local PANEL="/usr/local/bin/snell-panel.sh"
+  local PANEL_BAK="${CONFIG_DIR}/snell-panel.sh"
+  local SRC=""
+
+  mkdir -p "$CONFIG_DIR"
+
+  # 1. 优先尝试定位当前脚本所在路径
+  for candidate in "${BASH_SOURCE[0]:-}" "$0"; do
+    if [[ -n "$candidate" && -f "$candidate" && -r "$candidate" ]]; then
+      if grep -q "Snell (snell-server) 一键管理脚本" "$candidate" 2>/dev/null; then
+        SRC="$candidate"
+        break
+      fi
+    fi
+  done
+
+  if [[ -n "$SRC" ]]; then
+    # FIX: 避免源文件与目标文件为同一物理文件时 cp 报错退出
+    if [[ "$SRC" -ef "$PANEL" ]] || [[ "$SRC" == "$PANEL" ]]; then
+      chmod +x "$PANEL"
+    else
+      cp -f "$SRC" "$PANEL"
+      chmod +x "$PANEL"
+    fi
+    if [[ ! "$PANEL" -ef "$PANEL_BAK" ]]; then
+      cp -f "$PANEL" "$PANEL_BAK" 2>/dev/null || true
+    fi
+    print_ok "面板脚本已成功保存"
+  elif [[ -n "${SCRIPT_URL:-}" ]]; then
+    print_info "尝试从远程 URL 下载脚本保存面板..."
+    if curl -sSL --connect-timeout 10 -o "$PANEL" "$SCRIPT_URL" 2>/dev/null || wget -q -O "$PANEL" "$SCRIPT_URL" 2>/dev/null; then
+      chmod +x "$PANEL"
+      if [[ ! "$PANEL" -ef "$PANEL_BAK" ]]; then
+        cp -f "$PANEL" "$PANEL_BAK" 2>/dev/null || true
+      fi
+      print_ok "已从远程下载并保存面板脚本"
+    fi
+  fi
+
+  # 2. 补全互备路径
+  if [[ ! -s "$PANEL" && -s "$PANEL_BAK" ]]; then
+    if [[ ! "$PANEL_BAK" -ef "$PANEL" ]]; then
+      cp -f "$PANEL_BAK" "$PANEL"
+      chmod +x "$PANEL"
+    fi
+  elif [[ -s "$PANEL" && ! -s "$PANEL_BAK" ]]; then
+    if [[ ! "$PANEL" -ef "$PANEL_BAK" ]]; then
+      cp -f "$PANEL" "$PANEL_BAK"
+    fi
+  fi
+
+  if [[ ! -s "$PANEL" ]]; then
+    print_warn "未能自动保留面板脚本文件。"
+    print_warn "提示：通过管道 (curl | bash) 运行脚本时，建议先下载脚本文件到本地，例如："
+    print_warn "      wget -O snell.sh <脚本URL> && chmod +x snell.sh && ./snell.sh"
+  fi
+
+  # 3. 创建快捷指令 a
+  cat > /usr/local/bin/a <<'EOF'
+#!/bin/bash
+for path in /usr/local/bin/snell-panel.sh /etc/snell/snell-panel.sh; do
+  if [[ -f "$path" && -s "$path" ]]; then
+    exec bash "$path" "$@"
+  fi
+done
+echo "未找到 Snell 面板脚本，请把脚本保存到本地后再运行安装"
+exit 1
+EOF
+  chmod +x /usr/local/bin/a
+
+  # 4. 创建快捷指令 snell
+  cat > /usr/local/bin/snell <<'EOF'
+#!/bin/bash
+PANEL="/usr/local/bin/snell-panel.sh"
+[[ -f "$PANEL" && -s "$PANEL" ]] || PANEL="/etc/snell/snell-panel.sh"
+
+case "${1:-}" in
+  -v|--upgrade)
+    if [[ -f "$PANEL" && -s "$PANEL" ]]; then
+      exec bash "$PANEL" --upgrade --auto
+    else
+      echo "未找到面板脚本"
+    fi
+    ;;
+  --cleanup)
+    rm -f /usr/local/bin/snell-server.bak
+    rm -f /usr/local/bin/snell-server.tmp.*
+    rm -f /etc/snell/*.tmp 2>/dev/null || true
+    rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip 2>/dev/null || true
+    apt-get clean >/dev/null 2>&1 || true
+    ;;
+  *)
+    if [[ -f "$PANEL" && -s "$PANEL" ]]; then
+      exec bash "$PANEL" "$@"
+    else
+      echo "Snell 快捷命令"
+      echo "  snell -v, --upgrade  升级 snell-server"
+      echo "  snell --cleanup      清理旧备份"
+    fi
+    ;;
+esac
+EOF
+  chmod +x /usr/local/bin/snell
+}
+
+# ==================== 核心功能：安装 ====================
+apply_network_optimization() {
+  # 删除旧的 sysctl.d 配置，统一写入 /etc/sysctl.conf
+  rm -f /etc/sysctl.d/99-bbr.conf
+
+  cat > /etc/sysctl.conf <<'EOF'
+net.core.default_qdisc = fq
+net.core.rmem_max = 67108848
+net.core.wmem_max = 67108848
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_rmem = 16384 16777216 536870912
+net.ipv4.tcp_wmem = 16384 16777216 536870912
+net.ipv4.tcp_adv_win_scale = -2
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_timestamps = 1
+kernel.panic = -1
+vm.swappiness = 9
+net.ipv4.tcp_fastopen = 3
+EOF
+
+  sysctl -p >/dev/null 2>&1 || print_warn "sysctl -p 有参数未能生效，请手动执行 sysctl -p 查看错误"
+  sysctl --system >/dev/null 2>&1 || print_warn "sysctl --system 有参数未能生效，请手动执行 sysctl --system 查看错误"
+
+  if [[ -f "$SNELL_SERVICE_FILE" ]] && grep -q '^LimitNOFILE=' "$SNELL_SERVICE_FILE"; then
+    sed -i "s/^LimitNOFILE=.*/LimitNOFILE=${NET_NOFILE_LIMIT}/" "$SNELL_SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if is_active; then
+      systemctl restart snell >/dev/null 2>&1 || true
+      sleep 1
+      if is_active; then
+        print_ok "服务已重启，新的文件描述符上限已生效"
+      else
+        print_warn "服务重启失败，请检查: journalctl -u snell -n 20"
+      fi
+    fi
+  fi
+  print_ok "网络优化已应用"
+}
+
+# ==================== Swap 自动调整 ====================
+setup_swap() {
+  # 测试时可覆盖路径
+  local MEMINFO="${SWAP_MEMINFO:-/proc/meminfo}"
+  local SWAPS_FILE="${SWAP_SWAPS_FILE:-/proc/swaps}"
+  local FSTAB="${SWAP_FSTAB:-/etc/fstab}"
+  local SWAP_FILE="${SWAP_FILE:-/swapfile}"
+  local SWAP_OFF_SERVICE="${SWAP_OFF_SERVICE:-/etc/systemd/system/disable-swap.service}"
+  local RAM_MB SWAP_KB
+
+  RAM_MB=$(awk '/^MemTotal:/{printf "%d", $2/1024}' "$MEMINFO" 2>/dev/null || echo 0)
+  SWAP_KB=$(awk 'NR>1{s+=$3}END{print s+0}' "$SWAPS_FILE" 2>/dev/null || echo 0)
+
+  if [[ -z "$RAM_MB" || "$RAM_MB" -eq 0 ]]; then
+    print_warn "无法获取内存大小，跳过 Swap 配置"
+    return 0
+  fi
+
+  # 1G 内存的 VPS 实际可用通常为 900-997M，按 900M 视为 1G 档
+  local BIG_RAM_THRESHOLD_MB=900
+  if [[ "$RAM_MB" -lt "$BIG_RAM_THRESHOLD_MB" ]]; then
+    # 内存不足 1G 档：确保有至少 512M swap
+    # 移除“开机强制关闭 swap”的服务，避免把我们创建的 swap 在重启后关掉
+    if [[ -f "$SWAP_OFF_SERVICE" ]]; then
+      systemctl disable disable-swap.service >/dev/null 2>&1 || true
+      rm -f "$SWAP_OFF_SERVICE"
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    if [[ "$SWAP_KB" -ge 524288 ]]; then
+      print_ok "内存 ${RAM_MB}M，已有 $(awk 'BEGIN{printf "%.0f", '"$SWAP_KB"'/1024}')M Swap，无需新增"
+      return 0
+    fi
+
+    if [[ -f "$SWAP_FILE" ]]; then
+      local CUR_MB
+      CUR_MB=$(du -m "$SWAP_FILE" 2>/dev/null | awk '{print $1+0}' || echo 0)
+      if [[ "$CUR_MB" -ge 512 ]]; then
+        chmod 600 "$SWAP_FILE"
+        grep -qs "^${SWAP_FILE}[[:space:]]" "$FSTAB" || echo "${SWAP_FILE} none swap sw 0 0" >> "$FSTAB"
+        swapon "$SWAP_FILE" >/dev/null 2>&1 || true
+        print_ok "内存不足 1G，已启用现有 ${SWAP_FILE} (${CUR_MB}M)"
+        return 0
+      fi
+      # 已有 swapfile 但小于 512M，删掉重建
+      swapoff "$SWAP_FILE" >/dev/null 2>&1 || true
+      rm -f "$SWAP_FILE"
+    fi
+
+    print_info "内存不足 1G (${RAM_MB}M)，创建 512M Swap..."
+    if command -v fallocate >/dev/null 2>&1; then
+      fallocate -l 512M "$SWAP_FILE" 2>/dev/null || dd if=/dev/zero of="$SWAP_FILE" bs=1M count=512 2>/dev/null
+    else
+      dd if=/dev/zero of="$SWAP_FILE" bs=1M count=512 2>/dev/null
+    fi
+    chmod 600 "$SWAP_FILE"
+    mkswap "$SWAP_FILE" >/dev/null 2>&1
+    swapon "$SWAP_FILE" >/dev/null 2>&1
+    grep -qs "^${SWAP_FILE}[[:space:]]" "$FSTAB" || echo "${SWAP_FILE} none swap sw 0 0" >> "$FSTAB"
+    print_ok "Swap 已创建并启用 (512M)"
+  else
+    # 内存充足：关闭全部 swap（含系统自带），并清理 fstab 与脚本创建的 swapfile
+    if [[ "$SWAP_KB" -gt 0 ]]; then
+      print_info "内存充足 (${RAM_MB}M)，关闭全部 Swap..."
+      swapoff -a >/dev/null 2>&1 || true
+    fi
+    # 移除 fstab 中所有 swap 条目（含系统自带），防止重启后恢复
+    if [[ -s "$FSTAB" ]]; then
+      awk 'NF>=3 && $3=="swap" { next } { print }' "$FSTAB" > "${FSTAB}.tmp" && mv -f "${FSTAB}.tmp" "$FSTAB"
+    fi
+    # 删除脚本自己创建的 swapfile
+    if [[ -f "$SWAP_FILE" ]]; then
+      rm -f "$SWAP_FILE"
+    fi
+    # 安装开机强制关闭 swap 的服务：防止 fstab 之外的机制（GPT swap 分区自动挂载、
+    # systemd-swap、zram、云厂商脚本等）在重启后重新启用 swap
+    cat > "$SWAP_OFF_SERVICE" <<EOF
+[Unit]
+Description=Disable Swap (managed by one-click proxy script)
+DefaultDependencies=no
+After=swap.target local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for i in 1 2 3; do swapoff -a >/dev/null 2>&1; sleep 2; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable disable-swap.service >/dev/null 2>&1 || true
+    if [[ "$SWAP_KB" -gt 0 ]]; then
+      print_ok "全部 Swap 已关闭，fstab 中的 swap 条目已移除"
+    else
+      print_ok "内存充足 (${RAM_MB}M)，Swap 未启用，已同步清理 fstab 中的 swap 条目"
+    fi
+  fi
+}
+
+install_snell() {
+  clear
+  hr
+  print_info "开始安装 Snell (snell-server)"
+  hr
+
+  # 如果已安装，先停止服务；旧二进制等新版下载成功后再覆盖，避免下载失败时服务不可用
+  if is_installed; then
+    print_info "检测到已有安装，先停止服务..."
+    systemctl stop snell >/dev/null 2>&1 || true
+    systemctl disable snell >/dev/null 2>&1 || true
+    rm -f /usr/local/bin/snell-server.bak
+    rm -f /usr/local/bin/snell-server.tmp.*
+    rm -f "${CONFIG_DIR}"/*.tmp 2>/dev/null || true
+    sleep 1
+    print_ok "旧服务已停止"
+  fi
+
+  # 依赖
+  print_info "安装依赖..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq wget unzip curl ufw iproute2 cron jq tar >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf update -y >/dev/null 2>&1 || true
+    dnf install -y wget unzip curl firewalld cronie jq tar >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum update -y >/dev/null 2>&1 || true
+    yum install -y wget unzip curl firewalld cronie jq tar >/dev/null 2>&1 || true
+  fi
+  judge "依赖安装"
+
+  for c in wget unzip curl jq tar; do
+    command -v "$c" >/dev/null 2>&1 || { print_err "缺少必要依赖: $c"; exit 1; }
+  done
+
+  # 设置时区为上海
+  print_info "设置时区为 Asia/Shanghai..."
+  timedatectl set-timezone Asia/Shanghai 2>/dev/null || ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+  judge "时区设置"
+
+  # 网络优化 (开启 IPv4 优先、BBR 及 TCP Fast Open)
+  print_info "优化网络配置..."
+  check_system_ip
+  [[ "$IP_STACK" == "unknown" ]] && { print_err "无法获取服务器 IP，请检查网络"; exit 1; }
+  if [[ "$IP_STACK" == "dual" || "$IP_STACK" == "v4only" ]]; then
+    grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
+  fi
+
+  # 先停掉所有会接管 resolv.conf 的服务
+  systemctl disable systemd-resolved --now >/dev/null 2>&1 || true
+  systemctl mask systemd-resolved >/dev/null 2>&1 || true
+  systemctl disable resolvconf --now >/dev/null 2>&1 || true
+  systemctl mask resolvconf >/dev/null 2>&1 || true
+
+  # 直接删掉旧文件（可能是软链接），防止 resolvconf 再次覆盖
+  rm -f /etc/resolv.conf
+
+  # 重新写入
+  cat > /etc/resolv.conf <<'EOF'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 2606:4700:4700::1111
+nameserver 2001:4860:4860::8888
+EOF
+
+  apply_network_optimization
+  setup_swap
+
+  # 架构
+  ARCH=$(get_arch)
+  print_info "检测到系统架构: ${BGreen}${ARCH}${Font}"
+
+  # 交互输入
+  echo ""
+  if [[ "$IP_STACK" == "dual" ]]; then
+    echo -e "当前服务器 IPv4: ${BGreen}${IPV4}${Font}"
+    echo -e "当前服务器 IPv6: ${BGreen}${IPV6}${Font}"
+    echo -e "栈类型: ${BGreen}双栈 (IPv6 入站 + IPv4 出站优先)${Font}"
+  elif [[ "$IP_STACK" == "v4only" ]]; then
+    echo -e "当前服务器 IPv4: ${BGreen}${IPV4}${Font}"
+    echo -e "栈类型: ${BGreen}仅 IPv4${Font}"
+  elif [[ "$IP_STACK" == "v6only" ]]; then
+    echo -e "当前服务器 IPv6: ${BGreen}${IPV6}${Font}"
+    echo -e "栈类型: ${BGreen}仅 IPv6${Font}"
+  fi
+  echo -e "以下配置直接回车将使用默认值"
+  echo ""
+
+  local input_port input_name
+  read -rp "请输入 Snell 端口 [默认: 26216]: " input_port
+  local PORT=${input_port:-26216}
+  while ! valid_port "$PORT" || is_port_used "$PORT"; do
+    print_warn "端口无效或已被占用"
+    read -rp "请输入 Snell 端口 [默认: 26216]: " input_port
+    PORT=${input_port:-26216}
+  done
+
+  local DEF_PASS=$(gen_password)
+  local PASS
+  PASS=$(read_psk_interactive "" "$DEF_PASS")
+
+  local DEF_NAME=$(hostname 2>/dev/null || echo "Snell")
+  read -rp "请输入节点名称 [默认: ${DEF_NAME}]: " input_name
+  local NAME=${input_name:-$DEF_NAME}
+
+  # 下载 snell-server
+  print_info "获取 snell-server ${SNELL_VERSION}..."
+  local VER
+  VER=$(download_snell /usr/local/bin/snell-server) || VER=""
+  if [[ -z "$VER" ]]; then
+    print_err "下载 snell-server 失败"
+    systemctl restart snell >/dev/null 2>&1 || true
+    exit 1
+  fi
+  print_ok "snell-server 已安装: ${VER}"
+
+  # 根据栈类型生成配置
+  mkdir -p "$CONFIG_DIR"
+  echo "$IP_STACK" > "$STACK_FILE"
+  write_snell_conf "$PORT" "$PASS" "$IP_STACK"
+
+  # systemd
+  cat > "$SNELL_SERVICE_FILE" <<EOF
+[Unit]
+Description=Snell Server (snell-server)
+After=network.target
+
+[Service]
+Type=simple
+LimitNOFILE=${NET_NOFILE_LIMIT:-1048576}
+ExecStart=/usr/local/bin/snell-server -c ${CONF_FILE}
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable snell >/dev/null 2>&1 || true
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 2
+
+  if ! systemctl is-active --quiet snell; then
+    print_err "Snell 启动失败"
+    journalctl -u snell -n 20 --no-pager
+    exit 1
+  fi
+  judge "服务启动"
+
+  # 防火墙
+  setup_ufw "$PORT"
+
+  # 定时任务
+  setup_cron
+
+  # 快捷命令
+  create_shortcut
+
+  # 保存节点名称，避免后续修改时丢失
+  echo "$NAME" > "$NAME_FILE"
+
+  # 导出信息
+  export_snell_info "$PORT" "$PASS" "$NAME"
+
+  # 完成
+  echo ""
+  hr
+  print_ok "Snell 部署完成"
+  hr
+  echo -e " snell-server 版本: ${BGreen}$(get_local_version)${Font}"
+  echo -e " 监听端口: ${BGreen}${PORT}${Font}"
+  echo -e " 节点名称: ${BGreen}${NAME}${Font}"
+  echo ""
+  cat "$LIST_FILE"
+  hr
+
+  pause
+}
+
+# ==================== 核心功能：更新 ====================
+restore_old_binary() {
+  if [[ -x /usr/local/bin/snell-server.bak ]]; then
+    cp -f /usr/local/bin/snell-server.bak /usr/local/bin/snell-server
+    chmod +x /usr/local/bin/snell-server
+    rm -f /usr/local/bin/snell-server.bak
+  fi
+}
+
+update_snell() {
+
+  local AUTO_UPDATE=false
+
+  if [[ "${1:-}" == "--auto" ]]; then
+    AUTO_UPDATE=true
+  fi
+
+  # 确保在自动更新时也有架构变量
+  if [[ -z "${ARCH:-}" ]]; then
+    ARCH=$(get_arch)
+  fi
+
+  if [[ "$AUTO_UPDATE" != true ]]; then
+    clear
+  fi
+
+  hr
+  print_info "检查 snell-server / Snell 更新"
+  hr
+
+  if ! is_installed; then
+    print_err "Snell 未安装，无法更新"
+    if [[ "$AUTO_UPDATE" != true ]]; then
+      pause
+    fi
+    return
+  fi
+
+  local LOCAL_VER=$(get_local_version)
+  local REMOTE_VER=$(get_remote_version)
+
+  if [[ -z "$REMOTE_VER" ]]; then
+    print_err "获取在线版本失败，请检查网络"
+    if [[ "$AUTO_UPDATE" != true ]]; then
+      pause
+    fi
+    return
+  fi
+
+  echo -e " 本地版本: ${LOCAL_VER}"
+  echo -e " 远程版本: ${REMOTE_VER}"
+
+  if [[ "$LOCAL_VER" = "$REMOTE_VER" ]]; then
+    print_ok "当前已是最新版本"
+    if [[ "$AUTO_UPDATE" != true ]]; then
+      pause
+    fi
+    return
+  fi
+
+  local ans
+
+  if [[ "$AUTO_UPDATE" == true ]]; then
+    ans="y"
+    print_info "自动更新模式，确认升级到 ${REMOTE_VER}"
+  else
+    read -rp "是否升级到 ${REMOTE_VER}? [y/N]: " ans
+  fi
+
+  [[ ! "${ans:-N}" =~ ^[Yy]$ ]] && {
+    print_info "已取消"
+    [[ "$AUTO_UPDATE" != true ]] && pause
+    return
+  }
+
+  print_info "备份旧版本..."
+  rm -f /usr/local/bin/snell-server.bak
+  if [[ -x /usr/local/bin/snell-server ]]; then
+    cp -f /usr/local/bin/snell-server /usr/local/bin/snell-server.bak
+  fi
+
+  print_info "下载新版本..."
+  local DOWNLOADED
+  DOWNLOADED=$(download_snell /usr/local/bin/snell-server) || DOWNLOADED=""
+  if [[ -z "$DOWNLOADED" ]]; then
+    print_err "下载失败，恢复旧版本..."
+    restore_old_binary
+    [[ "$AUTO_UPDATE" != true ]] && pause
+    return
+  fi
+
+  print_info "重启服务..."
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 2
+
+  if systemctl is-active --quiet snell; then
+    print_ok "升级成功！当前版本: $(get_local_version)"
+    rm -f /usr/local/bin/snell-server.bak
+    cleanup_old
+    [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_local_version)/" "$LIST_FILE"
+  else
+    print_err "新版本启动失败，恢复旧版本..."
+    restore_old_binary
+    systemctl restart snell >/dev/null 2>&1 || true
+    sleep 2
+    if systemctl is-active --quiet snell; then
+      print_ok "已恢复旧版本，服务正常运行"
+    else
+      print_err "恢复后服务仍异常，请检查: journalctl -u snell -n 30"
+    fi
+  fi
+  [[ "$AUTO_UPDATE" != true ]] && pause
+}
+
+# ==================== 查看配置 ====================
+view_config() {
+  clear
+  hr
+  if [[ -f "$LIST_FILE" ]]; then
+    cat "$LIST_FILE"
+  else
+    print_err "未找到配置文件，请重新安装"
+  fi
+  hr
+  pause
+}
+
+# ==================== 更改端口 ====================
+change_port() {
+  clear
+  hr
+  print_info "更改 Snell 端口"
+  hr
+
+  if ! is_installed; then
+    print_err "Snell 未安装"
+    pause
+    return
+  fi
+
+  local CUR_PORT=$(get_conf_port)
+  [[ -z "$CUR_PORT" ]] && CUR_PORT="26216"
+  local NEW_PORT=$(read_port_interactive "" "$CUR_PORT")
+
+  [[ "$NEW_PORT" = "$CUR_PORT" ]] && { print_ok "端口未变更"; pause; return; }
+
+  local CUR_ADDR=$(get_conf_addr)
+  [[ -z "$CUR_ADDR" ]] && CUR_ADDR="[::]"
+  sed -i "s|^listen[[:space:]]*=.*|listen = ${CUR_ADDR}:${NEW_PORT}|" "$CONF_FILE"
+  judge "配置更新"
+
+  setup_ufw "$NEW_PORT"
+
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 1
+  if is_active; then
+    print_ok "端口已更新为: ${NEW_PORT}"
+    local PASS=$(get_conf_psk)
+    local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
+    export_snell_info "$NEW_PORT" "$PASS" "$NAME"
+  else
+    print_err "服务重启失败"
+  fi
+  pause
+}
+
+# ==================== 更改密码 ====================
+change_password() {
+  clear
+  hr
+  print_info "更改 Snell 密码"
+  hr
+
+  if ! is_installed; then
+    print_err "Snell 未安装"
+    pause
+    return
+  fi
+
+  local CUR_PASS=$(get_conf_psk)
+  local DEF_PASS=$(gen_password)
+  local NEW_PASS
+  NEW_PASS=$(read_psk_interactive "$CUR_PASS" "$DEF_PASS")
+
+  [[ "$NEW_PASS" = "$CUR_PASS" ]] && { print_ok "密码未变更"; pause; return; }
+
+  sed -i "s|^psk[[:space:]]*=.*|psk = ${NEW_PASS}|" "$CONF_FILE"
+  judge "密码更新"
+
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 1
+  if is_active; then
+    print_ok "密码已更新"
+    local PORT=$(get_conf_port)
+    local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
+    export_snell_info "$PORT" "$NEW_PASS" "$NAME"
+  else
+    print_err "服务重启失败"
+  fi
+  pause
+}
+
+# ==================== 切换监听模式 ====================
+change_mode() {
+  clear
+  hr
+  print_info "切换 Snell 监听模式"
+  hr
+
+  if ! is_installed; then
+    print_err "Snell 未安装"
+    pause
+    return
+  fi
+
+  local CUR_STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "unknown")
+  local CUR_TEXT="双栈 (IPv6 入站 + IPv4 出站优先)"
+  case "$CUR_STACK" in
+    v4only) CUR_TEXT="仅 IPv4" ;;
+    v6only) CUR_TEXT="仅 IPv6" ;;
+  esac
+
+  echo -e "当前模式: ${BGreen}${CUR_TEXT}${Font}"
+  echo " 1. 仅 IPv4"
+  echo " 2. 双栈 (IPv6 入站 + IPv4 出站优先)"
+  echo " 3. 仅 IPv6"
+  local input
+  read -rp "请选择 [1-3]: " input
+  local NEW_STACK=""
+  case "$input" in
+    1) NEW_STACK="v4only" ;;
+    2) NEW_STACK="dual" ;;
+    3) NEW_STACK="v6only" ;;
+    *) print_warn "无效选项"; pause; return ;;
+  esac
+
+  [[ "$NEW_STACK" = "$CUR_STACK" ]] && { print_ok "模式未变更"; pause; return; }
+
+  local PORT=$(get_conf_port)
+  local PASS=$(get_conf_psk)
+  local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
+  write_snell_conf "$PORT" "$PASS" "$NEW_STACK"
+  echo "$NEW_STACK" > "$STACK_FILE"
+  judge "配置更新"
+
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 1
+  if is_active; then
+    print_ok "监听模式已切换"
+    export_snell_info "$PORT" "$PASS" "$NAME"
+  else
+    print_err "服务重启失败"
+  fi
+  pause
+}
+
+# ==================== 重启 / 状态 ====================
+restart_service() {
+  clear
+  hr
+  print_info "重启 Snell 服务..."
+  systemctl restart snell >/dev/null 2>&1 || true
+  sleep 1
+  if is_active; then
+    print_ok "服务已重启"
+  else
+    print_err "服务重启失败"
+    journalctl -u snell -n 20 --no-pager
+  fi
+  pause
+}
+
+status_service() {
+  clear
+  systemctl status snell --no-pager
+  pause
+}
+
+# ==================== 卸载 ====================
+uninstall_snell() {
+  clear
+  hr
+  if ! is_installed; then
+    print_err "Snell 未安装"
+    pause
+    return
+  fi
+
+  local ans
+  read -rp "确认卸载并删除所有配置？(y/N): " ans
+  [[ ! "${ans:-N}" =~ ^[Yy]$ ]] && { print_info "已取消"; pause; return; }
+
+  print_info "停止服务..."
+  systemctl stop snell >/dev/null 2>&1 || true
+  systemctl disable snell >/dev/null 2>&1 || true
+  rm -f "$SNELL_SERVICE_FILE"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+
+  print_info "清理文件..."
+  rm -f /usr/local/bin/snell-server /usr/local/bin/snell-server.bak
+  rm -f /usr/local/bin/snell
+  rm -f /usr/local/bin/a
+  rm -f /usr/local/bin/snell-panel.sh
+  rm -f "${CONFIG_DIR}/snell-panel.sh"
+  rm -f "$CRON_CLEAN"
+  rm -f /usr/local/bin/snell-cleanup.sh
+  rm -f "$NAME_FILE"
+  rm -rf "$CONFIG_DIR"
+
+  print_ok "Snell 已彻底卸载"
+  pause
+}
+
+# ==================== 主菜单 ====================
+main() {
+  while true; do
+    clear
+    hr
+    echo -e " ${Bold}Snell (snell-server) 一键管理脚本${Font}"
+    echo -e " 基于官方 snell-server 闭源二进制 | 无证书依赖"
+    echo -e " 当前脚本版本: ${Magenta}${SHELL_VERSION}${Font}"
+    echo -e " 安装状态：$(install_status_text)"
+    echo -e " snell-server 版本: ${Cyan}$(get_local_version)${Font}"
+    hr
+    echo -e "${Cyan} 1. 安装 / 重装 Snell${Font}"
+    echo -e "${Cyan} 2. 更新 snell-server / Snell${Font}"
+    echo -e "${Cyan} 3. 查看节点配置${Font}"
+    echo -e "${Cyan} 4. 更改端口${Font}"
+    echo -e "${Cyan} 5. 更改密码${Font}"
+    echo -e "${Cyan} 6. 切换监听模式${Font}"
+    echo -e "${Cyan} 7. 重启服务${Font}"
+    echo -e "${Cyan} 8. 查看运行状态${Font}"
+    echo -e "${Cyan} 9. 卸载 Snell${Font}"
+    echo -e "${Cyan} 10. 重新应用网络优化 / 调整 Swap${Font}"
+    echo -e "${Cyan} 0. 退出${Font}"
+    hr
+    read -rp "请输入数字 [0-10]: " choice
+
+    case "$choice" in
+      1) install_snell ;;
+      2) update_snell ;;
+      3) view_config ;;
+      4) change_port ;;
+      5) change_password ;;
+      6) change_mode ;;
+      7) restart_service ;;
+      8) status_service ;;
+      9) uninstall_snell ;;
+      10) apply_network_optimization; setup_swap; create_shortcut ;;
+      0) exit 0 ;;
+      *) print_warn "无效选项"; sleep 1 ;;
+    esac
+  done
+}
+
+# 参数入口
+if [[ "${1:-}" == "--upgrade" ]]; then
+  ensure_root
+
+  if [[ "${2:-}" == "--auto" ]]; then
+    update_snell --auto
+  else
+    update_snell
+  fi
+
+  exit 0
+fi
+
+ensure_root
+main

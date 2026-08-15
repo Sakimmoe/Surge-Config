@@ -59,7 +59,7 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - 新增 `mode`：`default`（混淆 + AES）、`unshaped`（仅 AES，约快 10%）、`unsafe-raw`（明文，仅限内网）
 - 新增 `dns-ip-preference` 与 `dns` 配置，脚本按监听模式自动生成：
   - 仅 IPv4：`dns-ip-preference = ipv4-only`
-  - 仅 IPv6：`dns-ip-preference = ipv6-only`
+  - 仅 IPv6：`dns-ip-preference = ipv4-only`（IPv6 入站 + IPv4 出站，关闭 IPv6 出站）
   - 双栈：`dns-ip-preference = prefer-ipv4`（IPv4 出站优先）
 - v6 移除 QUIC Proxy Mode，防火墙只需放行 TCP
 - PSK 由协议内派生为部署级流量特征，不同 PSK 的服务器流量特征不同；PSK 长度 12-255

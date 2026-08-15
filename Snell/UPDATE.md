@@ -19,7 +19,7 @@
 - 第 23 行：`SNELL_VERSION="v6.0.0rc2"`
 - 把 `v6.0.0rc2` 改成新版号，例如 `v6.0.0rc3`
 
-这一行决定下载哪个版本：脚本第 309 行按 `${SNELL_VERSION}` 拼官方下载地址，第 310 行按它拼仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
+这一行决定下载哪个版本：脚本第 311 行按 `${SNELL_VERSION}` 拼官方下载地址，第 312 行按它拼仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
 
 ## 二、替换 vendor/ 安装包
 
@@ -45,16 +45,16 @@
 2. 三种网络模式的取值
    - 第 258 行：`make_listen()`，三种模式的监听地址
    - 第 267 行：`make_dns()`，三种模式的 DNS 服务器
-   - 第 275 行：`make_dns_pref()`，三种模式的 `dns-ip-preference`
+   - 第 276 行：`make_dns_pref()`，三种模式的 `dns-ip-preference`（注意：仅 IPv6 模式固定为 `ipv4-only`，即 IPv6 入站 + IPv4 出站，不要改回 `ipv6-only`）
 3. 客户端节点行
-   - 第 431 行开始：`export_snell_info()`
-   - 第 437-438 行：`EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
-   - 第 442、445、448 行：IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
+   - 第 433 行开始：`export_snell_info()`
+   - 第 439-440 行：`EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
+   - 第 444、448、451 行：IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
 4. 服务启动参数
-   - 第 887 行：`ExecStart=/usr/local/bin/snell-server -c ... --loglevel warning`
+   - 第 890 行：`ExecStart=/usr/local/bin/snell-server -c ... --loglevel warning`
    - 新版命令行参数有变化就改这一行
 5. 安装依赖（一般不用动）
-   - 第 769 行：Debian/Ubuntu 的依赖安装列表；新版本有新依赖才加
+   - 第 772 行：Debian/Ubuntu 的依赖安装列表；新版本有新依赖才加
 
 ## 五、推送仓库
 

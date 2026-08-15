@@ -1073,9 +1073,9 @@ update_snell() {
   echo -e " 本地版本: ${LOCAL_VER}"
   echo -e " 远程版本: ${REMOTE_VER}"
 
-  # 老安装没有版本记录文件：二进制 -v 只输出 6.0.0（无 rc 后缀），
-  # 与远程 6.0.0rc2 比较会误判，这里按去掉 rc 的主版本兼容一次
-  if [[ ! -f "$VERSION_FILE" ]]; then
+  # 老安装没有版本记录文件：二进制 -v 只输出 6.0.0（无 rc 后缀）。
+  # 远程为正式版时按主版本兼容；远程是 rc 版则走一次更新流程以记录完整版本
+  if [[ ! -f "$VERSION_FILE" && "$REMOTE_VER" != *rc* ]]; then
     local REMOTE_BASE
     REMOTE_BASE=$(printf '%s\n' "$REMOTE_VER" | sed -E 's/rc[0-9]+$//')
     if [[ "$LOCAL_VER" = "$REMOTE_BASE" ]]; then

@@ -1,5 +1,11 @@
 # Snell 脚本审查与变更记录
 
+## IPv6 节点行去掉方括号
+
+- 用户实测：Surge 的 Snell 节点行里 IPv6 地址带方括号（`[2a0e:...]`）连不通，去掉方括号正常
+- `export_snell_info()` 的 IPv6 节点行改为不带方括号；服务器配置里的 `[::]` 监听地址不受影响
+- README 与 AI_UPDATE.md 已注明该规则，防止后续升级时改回去
+
 ## 新增 AI_UPDATE.md（AI 升级任务说明）
 
 - 新增 `Snell/AI_UPDATE.md`：一份自包含的升级任务书，Snell 出新版时把整段内容发给 AI，即可让它完成仓库端升级（版本号、vendor、SHA256、配置函数检查、语法检查、推送）

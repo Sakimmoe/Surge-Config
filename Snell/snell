@@ -442,7 +442,8 @@ export_snell_info() {
     LINE4="IPv4 = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -n "$IPV6" ]]; then
-    LINE6="IPv6 = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
+    # Surge 的 Snell 节点行 IPv6 地址不加方括号，实测加括号会不通
+    LINE6="IPv6 = snell, ${IPV6}, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -z "$LINE4" && -z "$LINE6" ]]; then
     LINE4="IPv4 = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"

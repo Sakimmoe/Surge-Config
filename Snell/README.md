@@ -50,6 +50,8 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 
 安装完成会同时输出 IPv4 / IPv6 两条节点行（服务器有哪种就输出哪种），节点名固定为 `IPv4` / `IPv6`。`reuse` / `ecn` / `tfo` 都是可选优化参数，删掉只保留 `version=6` 也能连通。
 
+注意：Snell 的 IPv6 节点行地址**不要加方括号**，例如 `IPv6 = snell, 2a0e:97c0:3f4:1::d8e, 26216, ...`，加括号会连不通。
+
 ## 与旧版差异
 
 - 官方 v6 仅提供 amd64 / i386 / aarch64，不再有 armv7l

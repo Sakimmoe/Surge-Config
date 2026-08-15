@@ -19,6 +19,7 @@ LIST_FILE="${CONFIG_DIR}/list"
 CRON_CLEAN="/etc/cron.d/snell-cleanup"
 STACK_FILE="${CONFIG_DIR}/.stack"
 MODE_FILE="${CONFIG_DIR}/.mode"
+VERSION_FILE="${CONFIG_DIR}/.version"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
@@ -91,9 +92,15 @@ get_local_version() {
   fi
 }
 
+get_installed_version() {
+  local v
+  v=$(cat "$VERSION_FILE" 2>/dev/null || true)
+  [[ -n "$v" ]] || v=$(get_local_version)
+  echo "$v"
+}
+
 get_remote_version() {
-  # v6.0.0rc2 的二进制 -v 输出为 6.0.0（不带 rc 后缀），这里统一按 6.0.0 比较
-  printf '%s\n' "${SNELL_VERSION#v}" | sed -E 's/rc[0-9]+$//'
+  echo "${SNELL_VERSION#v}"
 }
 
 install_status_text() {
@@ -897,6 +904,7 @@ EOF
     exit 1
   fi
   print_ok "snell-server 已安装: ${VER}"
+  echo "${SNELL_VERSION#v}" > "$VERSION_FILE"
 
   # 根据栈类型生成配置
   mkdir -p "$CONFIG_DIR"
@@ -1051,7 +1059,7 @@ update_snell() {
     return
   fi
 
-  local LOCAL_VER=$(get_local_version)
+  local LOCAL_VER=$(get_installed_version)
   local REMOTE_VER=$(get_remote_version)
 
   if [[ -z "$REMOTE_VER" ]]; then
@@ -1064,6 +1072,20 @@ update_snell() {
 
   echo -e " 本地版本: ${LOCAL_VER}"
   echo -e " 远程版本: ${REMOTE_VER}"
+
+  # 老安装没有版本记录文件：二进制 -v 只输出 6.0.0（无 rc 后缀），
+  # 与远程 6.0.0rc2 比较会误判，这里按去掉 rc 的主版本兼容一次
+  if [[ ! -f "$VERSION_FILE" ]]; then
+    local REMOTE_BASE
+    REMOTE_BASE=$(printf '%s\n' "$REMOTE_VER" | sed -E 's/rc[0-9]+$//')
+    if [[ "$LOCAL_VER" = "$REMOTE_BASE" ]]; then
+      print_ok "当前已是最新版本"
+      if [[ "$AUTO_UPDATE" != true ]]; then
+        pause
+      fi
+      return
+    fi
+  fi
 
   if [[ "$LOCAL_VER" = "$REMOTE_VER" ]]; then
     print_ok "当前已是最新版本"
@@ -1126,7 +1148,8 @@ update_snell() {
   sleep 2
 
   if systemctl is-active --quiet snell; then
-    print_ok "升级成功！当前版本: $(get_local_version)"
+    print_ok "升级成功！当前版本: $(get_installed_version)"
+    echo "${SNELL_VERSION#v}" > "$VERSION_FILE"
     ensure_service_loglevel
     rm -f /usr/local/bin/snell-server.bak
     rm -f "${CONF_FILE}.v5bak" "${STACK_FILE}.v5bak"
@@ -1138,7 +1161,7 @@ update_snell() {
       MMODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
       export_snell_info "$MPORT" "$MPASS" "$MMODE"
     else
-      [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_local_version)/" "$LIST_FILE"
+      [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_installed_version)/" "$LIST_FILE"
     fi
   else
     print_err "新版本启动失败，恢复旧版本..."
@@ -1433,7 +1456,7 @@ main() {
     echo -e " 基于官方 snell-server 闭源二进制 | 无证书依赖"
     echo -e " 当前脚本版本: ${Magenta}${SHELL_VERSION}${Font}"
     echo -e " 安装状态：$(install_status_text)"
-    echo -e " snell-server 版本: ${Cyan}$(get_local_version)${Font}"
+    echo -e " snell-server 版本: ${Cyan}$(get_installed_version)${Font}"
     echo -e " 快捷命令: ${BGreen}s${Font}（直接输入 s 即可打开本面板）"
     hr
     echo -e "${Cyan} 1. 安装 / 重装 Snell${Font}"

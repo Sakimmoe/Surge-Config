@@ -24,6 +24,12 @@
   - dnf / yum：只装 `curl unzip cronie ca-certificates`，不再装未使用的 `firewalld` / `tar`
   - 下载改用 curl 优先，wget 仅作为可选回退（有就用到，没有也不安装）
 
+## 版本记录与更新流程
+
+- 新增 `/etc/snell/.version` 记录已安装的完整版本（含 rc 后缀，如 `6.0.0rc2`）
+- 更新检查改用完整版本比较；老安装没有版本记录时，按去掉 rc 后缀的主版本兼容一次，避免误判
+- 官方出新版（如 rc3）后，更新仓库的 `SNELL_VERSION` + `vendor/` 包 + SHA256 并推送，服务器端菜单 2 即可升级
+
 ## v3.0.4（IPv4 / IPv6 节点行都输出）
 
 - 安装完成与菜单 3 同时输出 IPv4 和 IPv6 两条 Surge 节点行（服务器有哪种就输出哪种），不再只给一条

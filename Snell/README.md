@@ -20,6 +20,16 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 10. 卸载
 0. 退出
 
+## 更新 Snell 版本
+
+官方发布新版本（例如 v6.0.0rc3）后，仓库更新只需三步：
+
+1. 把 `Snell/snell` 里的 `SNELL_VERSION` 改成新版，例如 `"v6.0.0rc3"`
+2. 从官方发布页下载 amd64 / i386 / aarch64 三个 zip，替换 `vendor/` 里的旧包，并同步更新本 README 里的 SHA256
+3. 提交并推送
+
+服务器端：重新运行一键命令刷新面板后，菜单选 2「更新」即可。脚本会记录已安装的完整版本（含 rc 后缀），rc2 → rc3 能正常识别并升级，不会误判成“已是最新”。
+
 ## 日志与清理
 
 - Snell 日志写入 systemd journal，服务以 `--loglevel warning` 运行，日常日志量很小

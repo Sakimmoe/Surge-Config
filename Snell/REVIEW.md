@@ -1,5 +1,11 @@
 # Snell 脚本审查与变更记录
 
+## v3.0.1（s 快捷命令）
+
+- 脚本入口在进入主菜单前先执行 `create_shortcut`，因此只要运行过一次 `bash <(curl -sL ...)`，即使没有安装 Snell，也会留下 `/usr/local/bin/s`
+- `s` 优先执行本机保存的面板脚本；如果面板文件缺失，会自动从仓库重新下载后再打开
+- 主菜单增加“快捷命令: s”提示，卸载时一并删除 `/usr/local/bin/s`
+
 ## v3.0.0（升级到 Snell v6.0.0rc2）
 
 按官方 [Snell 发布说明](https://kb.nssurge.com/surge-knowledge-base/release-notes/snell) 与 [Snell v6 博客](https://nssurge.com/blog/snell-v6/) 升级到 v6，整体优化/搭建方式继续套用 [Sakimmoe/AnyTLS](https://github.com/Sakimmoe/AnyTLS/blob/main/anytls)。

@@ -23,7 +23,7 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="3.0.0"
+SHELL_VERSION="3.0.1"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -586,7 +586,32 @@ exit 1
 EOF
   chmod +x /usr/local/bin/a
 
-  # 4. 创建快捷指令 snell
+  # 4. 创建快捷指令 s（面板没保存时自动重新下载，保证运行过一次就能用）
+  local S_ALREADY=false
+  [[ -e /usr/local/bin/s ]] && S_ALREADY=true
+  cat > /usr/local/bin/s <<EOF
+#!/bin/bash
+PANEL="/usr/local/bin/snell-panel.sh"
+[[ -f "\$PANEL" && -s "\$PANEL" ]] || PANEL="/etc/snell/snell-panel.sh"
+if [[ ! -f "\$PANEL" || ! -s "\$PANEL" ]]; then
+  echo "正在获取 Snell 面板脚本..."
+  if curl -fsSL --connect-timeout 10 -o /usr/local/bin/snell-panel.sh "${SCRIPT_URL}" 2>/dev/null || wget -q -O /usr/local/bin/snell-panel.sh "${SCRIPT_URL}" 2>/dev/null; then
+    chmod +x /usr/local/bin/snell-panel.sh
+    cp -f /usr/local/bin/snell-panel.sh /etc/snell/snell-panel.sh 2>/dev/null || true
+    PANEL="/usr/local/bin/snell-panel.sh"
+  else
+    echo "获取失败，请检查网络后重试"
+    exit 1
+  fi
+fi
+exec bash "\$PANEL" "\$@"
+EOF
+  chmod +x /usr/local/bin/s
+  if [[ "$S_ALREADY" != true ]]; then
+    print_ok "已创建快捷命令 s：以后直接输入 s 即可打开面板"
+  fi
+
+  # 5. 创建快捷指令 snell
   cat > /usr/local/bin/snell <<'EOF'
 #!/bin/bash
 PANEL="/usr/local/bin/snell-panel.sh"
@@ -1409,6 +1434,7 @@ uninstall_snell() {
   rm -f /usr/local/bin/snell-server /usr/local/bin/snell-server.bak
   rm -f /usr/local/bin/snell
   rm -f /usr/local/bin/a
+  rm -f /usr/local/bin/s
   rm -f /usr/local/bin/snell-panel.sh
   rm -f "${CONFIG_DIR}/snell-panel.sh"
   rm -f "$CRON_CLEAN"
@@ -1430,6 +1456,7 @@ main() {
     echo -e " 当前脚本版本: ${Magenta}${SHELL_VERSION}${Font}"
     echo -e " 安装状态：$(install_status_text)"
     echo -e " snell-server 版本: ${Cyan}$(get_local_version)${Font}"
+    echo -e " 快捷命令: ${BGreen}s${Font}（直接输入 s 即可打开本面板）"
     hr
     echo -e "${Cyan} 1. 安装 / 重装 Snell${Font}"
     echo -e "${Cyan} 2. 更新 snell-server / Snell${Font}"
@@ -1476,4 +1503,5 @@ if [[ "${1:-}" == "--upgrade" ]]; then
 fi
 
 ensure_root
+create_shortcut
 main

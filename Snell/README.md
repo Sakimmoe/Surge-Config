@@ -4,6 +4,8 @@
 bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell)
 ```
 
+运行过上面这行一次后，服务器上就会留下 `s` 快捷命令，以后直接输入 `s` 就能打开面板；不需要先完成搭建，即使只运行过一次并退出也可以用。
+
 ## 功能
 
 1. 安装 / 重装 Snell（snell-server v6.0.0rc2 官方二进制）

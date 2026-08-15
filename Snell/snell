@@ -19,7 +19,6 @@ LIST_FILE="${CONFIG_DIR}/list"
 CRON_CLEAN="/etc/cron.d/snell-cleanup"
 STACK_FILE="${CONFIG_DIR}/.stack"
 MODE_FILE="${CONFIG_DIR}/.mode"
-NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
@@ -331,9 +330,9 @@ download_snell() {
   URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip"
   MIRROR="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/vendor/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip"
 
-  if ! wget --timeout=30 -q -O "${TMP_DL}/snell-server.pkg" "$URL"; then
+  if ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$URL"; then
     print_warn "官方源 (dl.nssurge.com) 无 IPv6，尝试 GitHub 备用源..."
-    if ! wget --timeout=30 -q -O "${TMP_DL}/snell-server.pkg" "$MIRROR" && ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$MIRROR"; then
+    if ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$MIRROR" && ! wget --timeout=30 -q -O "${TMP_DL}/snell-server.pkg" "$MIRROR" 2>/dev/null; then
       rm -rf "$TMP_DL"
       return 1
     fi
@@ -460,14 +459,9 @@ EOF
 
 # ==================== 导出节点信息 ====================
 export_snell_info() {
-  local PORT="$1" PASS="$2" NAME="$3" MODE="$4"
+  local PORT="$1" PASS="$2" MODE="$3"
   MODE=${MODE:-$(cat "$MODE_FILE" 2>/dev/null || echo "default")}
   check_system_ip
-
-  # 节点名称直接作为 Surge 策略名；去掉可能破坏配置行的逗号与换行
-  NAME=$(printf '%s\n' "${NAME:-Snell_${PORT}}" | tr -d ',\r\n')
-  NAME=$(printf '%s' "$NAME" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  [[ -z "$NAME" ]] && NAME="Snell_${PORT}"
 
   # 输出 Surge 节点行：IPv4 和 IPv6 都输出（服务器有哪种就输出哪种）
   local EXTRA="version=6, reuse=true, ecn=true, tfo=true"
@@ -475,13 +469,13 @@ export_snell_info() {
 
   local LINE4="" LINE6=""
   if [[ -n "$IPV4" ]]; then
-    LINE4="${NAME} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE4="IPv4 = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -n "$IPV6" ]]; then
-    LINE6="${NAME} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE6="IPv6 = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
   if [[ -z "$LINE4" && -z "$LINE6" ]]; then
-    LINE4="${NAME} = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE4="IPv4 = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
 
   {
@@ -547,7 +541,7 @@ create_shortcut() {
   if [[ ! -s "$PANEL" ]]; then
     print_warn "未能自动保留面板脚本文件。"
     print_warn "提示：通过管道 (curl | bash) 运行脚本时，建议先下载脚本文件到本地，例如："
-    print_warn "      wget -O snell.sh <脚本URL> && chmod +x snell.sh && ./snell.sh"
+    print_warn "      curl -o snell.sh <脚本URL> && chmod +x snell.sh && ./snell.sh"
   fi
 
   # 3. 创建快捷指令 a
@@ -810,17 +804,17 @@ install_snell() {
   print_info "安装依赖..."
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq wget unzip curl ufw iproute2 cron tar >/dev/null 2>&1 || true
+    apt-get install -y -qq curl unzip ufw iproute2 cron ca-certificates >/dev/null 2>&1 || true
   elif command -v dnf >/dev/null 2>&1; then
     dnf update -y >/dev/null 2>&1 || true
-    dnf install -y wget unzip curl firewalld cronie tar >/dev/null 2>&1 || true
+    dnf install -y curl unzip cronie ca-certificates >/dev/null 2>&1 || true
   elif command -v yum >/dev/null 2>&1; then
     yum update -y >/dev/null 2>&1 || true
-    yum install -y wget unzip curl firewalld cronie tar >/dev/null 2>&1 || true
+    yum install -y curl unzip cronie ca-certificates >/dev/null 2>&1 || true
   fi
   judge "依赖安装"
 
-  for c in wget unzip curl tar; do
+  for c in curl unzip; do
     command -v "$c" >/dev/null 2>&1 || { print_err "缺少必要依赖: $c"; exit 1; }
   done
 
@@ -877,7 +871,7 @@ EOF
   echo -e "以下配置直接回车将使用默认值"
   echo ""
 
-  local input_port input_name
+  local input_port
   read -rp "请输入 Snell 端口 [默认: 26216]: " input_port
   local PORT=${input_port:-26216}
   while ! valid_port "$PORT" || is_port_used "$PORT"; do
@@ -889,10 +883,6 @@ EOF
   local DEF_PASS=$(gen_password)
   local PASS
   PASS=$(read_psk_interactive "" "$DEF_PASS")
-
-  local DEF_NAME=$(hostname 2>/dev/null || echo "Snell")
-  read -rp "请输入节点名称 [默认: ${DEF_NAME}]: " input_name
-  local NAME=${input_name:-$DEF_NAME}
 
   local MODE
   MODE=$(read_mode_interactive)
@@ -970,11 +960,8 @@ EOF
   # 快捷命令
   create_shortcut
 
-  # 保存节点名称，避免后续修改时丢失
-  echo "$NAME" > "$NAME_FILE"
-
   # 导出信息
-  export_snell_info "$PORT" "$PASS" "$NAME" "$MODE"
+  export_snell_info "$PORT" "$PASS" "$MODE"
 
   # 完成
   echo ""
@@ -1145,12 +1132,11 @@ update_snell() {
     rm -f "${CONF_FILE}.v5bak" "${STACK_FILE}.v5bak"
     cleanup_old
     if [[ "$NEED_MIGRATE" == true ]]; then
-      local MPORT MPASS MNAME MMODE
+      local MPORT MPASS MMODE
       MPORT=$(get_conf_port)
       MPASS=$(get_conf_psk)
-      MNAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
       MMODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
-      export_snell_info "$MPORT" "$MPASS" "$MNAME" "$MMODE"
+      export_snell_info "$MPORT" "$MPASS" "$MMODE"
     else
       [[ -f "$LIST_FILE" ]] && sed -i "s/snell-server 版本:.*/snell-server 版本: $(get_local_version)/" "$LIST_FILE"
     fi
@@ -1216,9 +1202,8 @@ change_port() {
   if is_active; then
     print_ok "端口已更新为: ${NEW_PORT}"
     local PASS=$(get_conf_psk)
-    local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
     local MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
-    export_snell_info "$NEW_PORT" "$PASS" "$NAME" "$MODE"
+    export_snell_info "$NEW_PORT" "$PASS" "$MODE"
   else
     print_err "服务重启失败"
   fi
@@ -1253,9 +1238,8 @@ change_password() {
   if is_active; then
     print_ok "密码已更新"
     local PORT=$(get_conf_port)
-    local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
     local MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
-    export_snell_info "$PORT" "$NEW_PASS" "$NAME" "$MODE"
+    export_snell_info "$PORT" "$NEW_PASS" "$MODE"
   else
     print_err "服务重启失败"
   fi
@@ -1317,7 +1301,6 @@ change_listen_mode() {
 
   local PORT=$(get_conf_port)
   local PASS=$(get_conf_psk)
-  local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
   local MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "default")
   write_snell_conf "$PORT" "$PASS" "$NEW_STACK" "$MODE"
   echo "$NEW_STACK" > "$STACK_FILE"
@@ -1327,7 +1310,7 @@ change_listen_mode() {
   sleep 1
   if is_active; then
     print_ok "监听模式已切换"
-    export_snell_info "$PORT" "$PASS" "$NAME" "$MODE"
+    export_snell_info "$PORT" "$PASS" "$MODE"
   else
     print_err "服务重启失败"
   fi
@@ -1368,7 +1351,6 @@ change_protocol_mode() {
 
   local PORT=$(get_conf_port)
   local PASS=$(get_conf_psk)
-  local NAME=$(cat "$NAME_FILE" 2>/dev/null || echo "Snell")
   local STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "dual")
   write_snell_conf "$PORT" "$PASS" "$STACK" "$NEW_MODE"
   echo "$NEW_MODE" > "$MODE_FILE"
@@ -1378,7 +1360,7 @@ change_protocol_mode() {
   sleep 1
   if is_active; then
     print_ok "协议模式已切换"
-    export_snell_info "$PORT" "$PASS" "$NAME" "$NEW_MODE"
+    export_snell_info "$PORT" "$PASS" "$NEW_MODE"
   else
     print_err "服务重启失败"
   fi
@@ -1436,7 +1418,6 @@ uninstall_snell() {
   rm -f "${CONFIG_DIR}/snell-panel.sh"
   rm -f "$CRON_CLEAN"
   rm -f /usr/local/bin/snell-cleanup.sh
-  rm -f "$NAME_FILE"
   rm -rf "$CONFIG_DIR"
 
   print_ok "Snell 已彻底卸载"

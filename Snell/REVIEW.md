@@ -16,6 +16,14 @@
 - 精简输出为单行后，行首节点名被写死为 `Snell_端口`，用户输入的节点名称被忽略
 - 现在安装时填写的节点名称会直接作为 Surge 策略名输出（IPv4 / IPv6 行一致），并自动过滤逗号、换行等会破坏配置行的字符
 
+## 依赖精简与固定节点名
+
+- 删除“请输入节点名称”步骤，节点输出行固定使用 `IPv4` / `IPv6` 作为 Surge 策略名
+- 安装依赖精简：
+  - apt：只装 `curl unzip ufw iproute2 cron ca-certificates`，不再装 `wget` / `tar`
+  - dnf / yum：只装 `curl unzip cronie ca-certificates`，不再装未使用的 `firewalld` / `tar`
+  - 下载改用 curl 优先，wget 仅作为可选回退（有就用到，没有也不安装）
+
 ## v3.0.4（IPv4 / IPv6 节点行都输出）
 
 - 安装完成与菜单 3 同时输出 IPv4 和 IPv6 两条 Surge 节点行（服务器有哪种就输出哪种），不再只给一条

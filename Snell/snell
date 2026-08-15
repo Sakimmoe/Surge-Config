@@ -23,7 +23,7 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="3.0.2"
+SHELL_VERSION="3.0.3"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -464,54 +464,20 @@ export_snell_info() {
   MODE=${MODE:-$(cat "$MODE_FILE" 2>/dev/null || echo "default")}
   check_system_ip
 
-  local STACK_NOW=$(cat "$STACK_FILE" 2>/dev/null || echo "unknown")
-  local STACK_TEXT="双栈 (IPv6 入站 + IPv4 出站优先)"
-  case "$STACK_NOW" in
-    v4only) STACK_TEXT="仅 IPv4" ;;
-    v6only) STACK_TEXT="仅 IPv6" ;;
-  esac
-  local MODE_TEXT="default（混淆 + AES）"
-  case "$MODE" in
-    unshaped)   MODE_TEXT="unshaped（仅 AES，约快 10%）" ;;
-    unsafe-raw) MODE_TEXT="unsafe-raw（明文，仅限内网）" ;;
-  esac
-
-  local LINE4="" LINE6=""
+  # 只输出一条 Surge 节点行：优先 IPv4，没有 IPv4 时用 IPv6
   local EXTRA="version=6, reuse=true, ecn=true, tfo=true"
   [[ "$MODE" != "default" ]] && EXTRA="version=6, mode=${MODE}, reuse=true, ecn=true, tfo=true"
+
+  local LINE=""
   if [[ -n "$IPV4" ]]; then
-    LINE4="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
-  fi
-  if [[ -n "$IPV6" ]]; then
-    LINE6="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
+    LINE="Snell_${PORT} = snell, ${IPV4}, ${PORT}, psk=${PASS}, ${EXTRA}"
+  elif [[ -n "$IPV6" ]]; then
+    LINE="Snell_${PORT} = snell, [${IPV6}], ${PORT}, psk=${PASS}, ${EXTRA}"
+  else
+    LINE="Snell_${PORT} = snell, 服务器IP, ${PORT}, psk=${PASS}, ${EXTRA}"
   fi
 
-  {
-    echo "=========== Snell (snell-server) 配置参数 ==========="
-    echo " 节点名称: ${NAME}"
-    echo " 服务器: ${MAIN_IP:-未知}"
-    echo " IPv4: ${IPV4:-无}"
-    echo " IPv6: ${IPV6:-无}"
-    echo " 端口: ${PORT}"
-    echo " 密码: ${PASS}"
-    echo " 监听模式: ${STACK_TEXT}"
-    echo " 协议模式: ${MODE_TEXT}"
-    echo " snell-server 版本: $(get_local_version)"
-    echo "=================================================="
-    echo ""
-    echo " Surge 配置:"
-    if [[ -n "$LINE4" ]]; then
-      echo " ${LINE4}"
-    fi
-    if [[ -n "$LINE6" ]]; then
-      echo " ${LINE6}"
-    fi
-    echo ""
-    echo " 说明: Snell 协议没有通用 snell:// 链接；"
-    echo " 将上面的 Surge 配置行直接粘贴到 Surge 配置文件即可。"
-    echo " 注意: Snell v6 需要支持 v6 的最新 Surge 测试版；"
-    echo " 服务端与客户端 mode 必须保持一致，PSK 不同则流量特征不同。"
-  } > "$LIST_FILE"
+  printf '%s\n' "$LINE" > "$LIST_FILE"
   chmod 600 "$LIST_FILE"
 }
 
@@ -976,16 +942,9 @@ EOF
 
   # 完成
   echo ""
-  hr
   print_ok "Snell 部署完成"
-  hr
-  echo -e " snell-server 版本: ${BGreen}$(get_local_version)${Font}"
-  echo -e " 监听端口: ${BGreen}${PORT}${Font}"
-  echo -e " 节点名称: ${BGreen}${NAME}${Font}"
-  echo -e " 协议模式: ${BGreen}${MODE}${Font}"
+  echo -e " ${BGreen}$(cat "$LIST_FILE")${Font}"
   echo ""
-  cat "$LIST_FILE"
-  hr
 
   pause
 }
@@ -1179,10 +1138,10 @@ update_snell() {
 view_config() {
   clear
   hr
-  if [[ -f "$LIST_FILE" ]]; then
+  if [[ -s "$LIST_FILE" ]]; then
     cat "$LIST_FILE"
   else
-    print_err "未找到配置文件，请重新安装"
+    print_err "未找到节点信息，请重新安装"
   fi
   hr
   pause

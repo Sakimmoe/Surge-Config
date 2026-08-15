@@ -1,5 +1,14 @@
 # Snell 脚本审查与变更记录
 
+## 出站策略按服务器真实网络（仅 v4 / 双栈 / 仅 v6）
+
+- 出站地址族不再按“监听模式”决定，而是按安装时探测到的服务器真实网络（写入 `.netstack`）：
+  - 仅 IPv4 服务器：`listen = 0.0.0.0:端口`，`dns-ip-preference = ipv4-only`，DNS 用 IPv4
+  - 双栈服务器：`listen = 0.0.0.0:端口,[::]:端口`，`dns-ip-preference = ipv4-only`（IPv6 可入站，出站只用 IPv4）
+  - 纯 IPv6 服务器：`listen = [::]:端口`，`dns-ip-preference = ipv6-only`，DNS 用 IPv6（没有 IPv4 时只能用 IPv6 出站，否则无法联网）
+- 双栈 / 仅 IPv4 服务器手动选“仅 IPv6 入站”时：监听只开 IPv6，出站仍按真实网络走 IPv4
+- 旧安装没有 `.netstack` 时按有 IPv4 处理（ipv4-only + IPv4 DNS），纯 IPv6 老安装需要重装一次生成记录
+
 ## 双栈模式出站也改为仅 IPv4
 
 - 用户要求彻底关闭 IPv6 出站：双栈模式（IPv6 入站 + IPv4 出站）的 `dns-ip-preference` 从 `prefer-ipv4` 改为 `ipv4-only`
@@ -121,8 +130,9 @@
 - 仅 IPv6 模式使用 `[::]` 监听，Linux 默认 IPv6 套接字可能同时接受 IPv4 映射连接（与 v5 同源限制）
 - 设置时区、禁用 systemd-resolved、覆盖 DNS 等属于“代理机专用”的激进改动
 
-## 三种网络模式的配置对照（已按官方帮助/示例核对，未在真实服务器实测）
+## 三种服务器网络与监听模式的配置对照（已按官方帮助/示例核对，未在真实服务器实测）
 
-- 仅 IPv4：`listen = 0.0.0.0:端口` + `dns-ip-preference = ipv4-only`
-- 双栈：`listen = 0.0.0.0:端口,[::]:端口` + `dns-ip-preference = ipv4-only`（IPv6 入站 + 仅 IPv4 出站）
-- 仅 IPv6：`listen = [::]:端口` + `dns-ip-preference = ipv4-only`（IPv6 入站 + 仅 IPv4 出站）
+- 仅 IPv4 服务器：`listen = 0.0.0.0:端口` + `dns-ip-preference = ipv4-only` + IPv4 DNS
+- 双栈服务器：`listen = 0.0.0.0:端口,[::]:端口` + `dns-ip-preference = ipv4-only` + IPv4 DNS（IPv6 入站 + 仅 IPv4 出站）
+- 纯 IPv6 服务器：`listen = [::]:端口` + `dns-ip-preference = ipv6-only` + IPv6 DNS
+- 双栈服务器手动选“仅 IPv6 入站”：`listen = [::]:端口` + `dns-ip-preference = ipv4-only`（出站仍走 IPv4）

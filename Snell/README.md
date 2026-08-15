@@ -57,10 +57,11 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - 官方 v6 仅提供 amd64 / i386 / aarch64，不再有 armv7l
 - `listen` 支持多地址同时监听，例如 `0.0.0.0:26216,[::]:26216`，不再依赖 IPv6 套接字兼容 IPv4
 - 新增 `mode`：`default`（混淆 + AES）、`unshaped`（仅 AES，约快 10%）、`unsafe-raw`（明文，仅限内网）
-- 新增 `dns-ip-preference` 与 `dns` 配置，脚本按监听模式自动生成：
-  - 仅 IPv4：`dns-ip-preference = ipv4-only`
-  - 双栈：`dns-ip-preference = ipv4-only`（IPv6 入站 + 仅 IPv4 出站，彻底关闭 IPv6 出站）
-  - 仅 IPv6：`dns-ip-preference = ipv4-only`（IPv6 入站 + IPv4 出站，关闭 IPv6 出站）
+- 新增 `dns-ip-preference` 与 `dns` 配置，按服务器真实网络自动生成：
+  - 仅 IPv4 服务器：`ipv4-only` + IPv4 DNS，入站 / 出站都是 IPv4
+  - 双栈服务器：`ipv4-only` + IPv4 DNS，入站可收 IPv4 / IPv6，出站只用 IPv4（彻底关闭 IPv6 出站）
+  - 纯 IPv6 服务器：`ipv6-only` + IPv6 DNS，入站 / 出站只能用 IPv6
+- 双栈或仅 IPv4 服务器手动选“仅 IPv6 入站”时：监听只开 IPv6，出站仍是 IPv4
 - v6 移除 QUIC Proxy Mode，防火墙只需放行 TCP
 - PSK 由协议内派生为部署级流量特征，不同 PSK 的服务器流量特征不同；PSK 长度 12-255
 - systemd 以 nobody 运行，配置权限收紧为 640，节点信息 600

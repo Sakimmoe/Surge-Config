@@ -14,8 +14,8 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 6. 切换监听模式（IPv4 / 双栈 / IPv6）
 7. 重启服务
 8. 查看运行状态
-9. 卸载
-10. 重新应用网络优化 / 调整 Swap
+9. 重新应用网络优化 / 调整 Swap
+10. 卸载
 0. 退出
 
 ## 客户端配置（Surge）

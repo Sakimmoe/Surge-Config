@@ -1,5 +1,16 @@
 # Snell 脚本审查与变更记录
 
+## v3.0.5（Debian/Ubuntu 长期使用的清理与日志优化）
+
+- 清理脚本针对 Debian/Ubuntu 调整：
+  - `apt-get autoremove --purge -y`，残留依赖与旧内核清得更干净
+  - systemd journal 从 7 天 / 50M 收紧为 3 天 / 30M（Snell 日志也在 journal 里）
+  - 补充清理 v5→v6 迁移备份 `*.v5bak` 等历史残留
+- systemd 服务增加 `--loglevel warning`，从源头减少 Snell 日志写入
+- 旧安装自动适配：每次进入面板时检测服务文件，缺 `--loglevel` 就补上并重启；启动失败自动回滚
+- 菜单 9「重新应用网络优化 / 调整 Swap」现在会顺带重写每周清理任务，老服务器不用重装即可刷新
+- Debian 11 / Ubuntu（apt 系）为脚本的主要支持目标
+
 ## v3.0.4（IPv4 / IPv6 节点行都输出）
 
 - 安装完成与菜单 3 同时输出 IPv4 和 IPv6 两条 Surge 节点行（服务器有哪种就输出哪种），不再只给一条

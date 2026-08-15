@@ -23,7 +23,7 @@ NAME_FILE="${CONFIG_DIR}/.name"
 NET_NOFILE_LIMIT=1048576
 SNELL_VERSION="v6.0.0rc2"
 TZ_DEFAULT="Asia/Shanghai"
-SHELL_VERSION="3.0.4"
+SHELL_VERSION="3.0.5"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -426,10 +426,10 @@ set -e
 # apt 缓存与残留依赖
 apt-get clean >/dev/null 2>&1 || true
 apt-get autoclean -y >/dev/null 2>&1 || true
-apt-get autoremove -y >/dev/null 2>&1 || true
+apt-get autoremove --purge -y >/dev/null 2>&1 || true
 
-# systemd 日志：保留最近 7 天且总大小不超过 50M
-journalctl --vacuum-time=7d --vacuum-size=50M >/dev/null 2>&1 || true
+# systemd 日志（含 Snell）：保留最近 3 天且总大小不超过 30M
+journalctl --vacuum-time=3d --vacuum-size=30M >/dev/null 2>&1 || true
 
 # 临时文件：只删 7 天以上的普通文件，再删 7 天以上的空目录
 find /tmp /var/tmp -mindepth 1 -type f -mtime +7 -delete >/dev/null 2>&1 || true
@@ -438,7 +438,7 @@ find /tmp /var/tmp -mindepth 1 -type d -mtime +7 -empty -delete >/dev/null 2>&1 
 # snell-server 更新残留
 rm -f /usr/local/bin/snell-server.bak >/dev/null 2>&1 || true
 rm -f /usr/local/bin/snell-server.tmp.* >/dev/null 2>&1 || true
-rm -f /etc/snell/*.tmp >/dev/null 2>&1 || true
+rm -f /etc/snell/*.tmp /etc/snell/*.v5bak >/dev/null 2>&1 || true
 rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip >/dev/null 2>&1 || true
 
 # 清理 systemd 失败状态
@@ -616,6 +616,32 @@ case "${1:-}" in
 esac
 EOF
   chmod +x /usr/local/bin/snell
+}
+
+# 给已安装的老服务补上日志级别限制（新安装的服务已自带 --loglevel warning）
+ensure_service_loglevel() {
+  [[ -f "$SNELL_SERVICE_FILE" ]] || return 0
+  grep -q -- '--loglevel' "$SNELL_SERVICE_FILE" 2>/dev/null && return 0
+
+  print_info "为 snell.service 增加 --loglevel warning（减少日志写入）..."
+  cp -f "$SNELL_SERVICE_FILE" "${SNELL_SERVICE_FILE}.loglevel.bak" 2>/dev/null || true
+  sed -i 's|^ExecStart=.*$|& --loglevel warning|' "$SNELL_SERVICE_FILE"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+
+  if is_active; then
+    systemctl restart snell >/dev/null 2>&1 || true
+    sleep 1
+    if ! is_active; then
+      print_warn "加上日志参数后启动失败，已回滚服务配置"
+      mv -f "${SNELL_SERVICE_FILE}.loglevel.bak" "$SNELL_SERVICE_FILE" 2>/dev/null || true
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      systemctl restart snell >/dev/null 2>&1 || true
+      return 0
+    fi
+  fi
+
+  rm -f "${SNELL_SERVICE_FILE}.loglevel.bak"
+  print_ok "snell 日志级别已限制为 warning"
 }
 
 # ==================== 核心功能：安装 ====================
@@ -901,7 +927,7 @@ Type=simple
 User=${SVC_USER}
 Group=${SVC_GROUP}
 LimitNOFILE=${NET_NOFILE_LIMIT:-1048576}
-ExecStart=/usr/local/bin/snell-server -c ${CONF_FILE}
+ExecStart=/usr/local/bin/snell-server -c ${CONF_FILE} --loglevel warning
 Restart=on-failure
 RestartSec=3s
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -1109,6 +1135,7 @@ update_snell() {
 
   if systemctl is-active --quiet snell; then
     print_ok "升级成功！当前版本: $(get_local_version)"
+    ensure_service_loglevel
     rm -f /usr/local/bin/snell-server.bak
     rm -f "${CONF_FILE}.v5bak" "${STACK_FILE}.v5bak"
     cleanup_old
@@ -1446,7 +1473,7 @@ main() {
       6) change_mode ;;
       7) restart_service ;;
       8) status_service ;;
-      9) apply_network_optimization; setup_swap; create_shortcut ;;
+      9) apply_network_optimization; setup_swap; setup_cron; create_shortcut ;;
       10) uninstall_snell ;;
       0) exit 0 ;;
       *) print_warn "无效选项"; sleep 1 ;;
@@ -1469,4 +1496,5 @@ fi
 
 ensure_root
 create_shortcut
+ensure_service_loglevel
 main

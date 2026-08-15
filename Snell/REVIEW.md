@@ -1,10 +1,16 @@
 # Snell 脚本审查与变更记录
 
+## 双栈模式出站也改为仅 IPv4
+
+- 用户要求彻底关闭 IPv6 出站：双栈模式（IPv6 入站 + IPv4 出站）的 `dns-ip-preference` 从 `prefer-ipv4` 改为 `ipv4-only`
+- 现在三种模式统一 `ipv4-only` 出站：入站可以收 v6，出站只走 IPv4
+- DNS 统一使用 IPv4（1.1.1.1 / 8.8.8.8）
+
 ## 仅 IPv6 模式改为 IPv6 入站 + IPv4 出站
 
 - 之前“仅 IPv6”模式把出站也设为 IPv6（`dns-ip-preference = ipv6-only`），与 AnyTLS 的 v6 节点行为不一致
 - 现在“仅 IPv6”模式：`listen = [::]:端口`（IPv6 入站），`dns = 1.1.1.1,8.8.8.8` + `dns-ip-preference = ipv4-only`（彻底关闭 IPv6 出站）
-- 双栈模式保持 `prefer-ipv4`（IPv4 出站优先，必要时可用 IPv6 兜底）
+- 双栈模式同样为 `ipv4-only`（IPv6 入站 + 仅 IPv4 出站）
 
 ## IPv6 节点行去掉方括号
 
@@ -90,8 +96,7 @@
   - `default`：混淆 + AES
   - `unshaped`：仅 AES，约快 10%，特征类似 v3 随机流
   - `unsafe-raw`：明文，仅限内网或已有安全隧道
-- 新增 `dns` 与 `dns-ip-preference`，脚本按监听模式自动设置：
-  - v4only → `ipv4-only`，v6only → `ipv6-only`，双栈 → `prefer-ipv4`
+- 新增 `dns` 与 `dns-ip-preference`：三种模式统一 `ipv4-only` 出站，DNS 统一用 IPv4
 - v6 移除 QUIC Proxy Mode，UFW 只放行 TCP，不再放行 UDP
 - PSK 长度放宽为 12-255（v6 官方限制）
 - 客户端 Surge 行：`version=6`，非 default 模式追加 `mode=<同名>`
@@ -119,5 +124,5 @@
 ## 三种网络模式的配置对照（已按官方帮助/示例核对，未在真实服务器实测）
 
 - 仅 IPv4：`listen = 0.0.0.0:端口` + `dns-ip-preference = ipv4-only`
-- 双栈：`listen = 0.0.0.0:端口,[::]:端口` + `dns-ip-preference = prefer-ipv4`
-- 仅 IPv6：`listen = [::]:端口` + `dns-ip-preference = ipv4-only`（IPv6 入站 + IPv4 出站）
+- 双栈：`listen = 0.0.0.0:端口,[::]:端口` + `dns-ip-preference = ipv4-only`（IPv6 入站 + 仅 IPv4 出站）
+- 仅 IPv6：`listen = [::]:端口` + `dns-ip-preference = ipv4-only`（IPv6 入站 + 仅 IPv4 出站）

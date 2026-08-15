@@ -19,7 +19,7 @@
 - 第 23 行：`SNELL_VERSION="v6.0.0rc2"`
 - 把 `v6.0.0rc2` 改成新版号，例如 `v6.0.0rc3`
 
-这一行决定下载哪个版本：脚本第 311 行按 `${SNELL_VERSION}` 拼官方下载地址，第 312 行按它拼仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
+这一行决定下载哪个版本：脚本第 303 行按 `${SNELL_VERSION}` 拼官方下载地址，第 304 行按它拼仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
 
 ## 二、替换 vendor/ 安装包
 
@@ -32,7 +32,7 @@
 ## 三、改 Snell/README.md
 
 - 第 11 行：功能第 1 条里的 `snell-server v6.0.0rc2` 改成新版号
-- 第 75-80 行：「官方安装包 SHA256」一节，把三行哈希和文件名换成新包的值（哈希用你常用的校验工具算）
+- 第 79-84 行：「官方安装包 SHA256」一节，把三行哈希和文件名换成新包的值（哈希用你常用的校验工具算）
 
 ## 四、新版本配置格式变了才改的代码
 
@@ -40,21 +40,21 @@
 
 1. 配置文件模板
    - 文件：`Snell/snell`
-   - 第 284 行开始：`write_snell_conf()`，生成的配置内容是 `listen / psk / mode / dns / dns-ip-preference`
+   - 第 278 行开始：`write_snell_conf()`，生成的配置内容是 `listen / psk / mode / dns / dns-ip-preference`
    - 官方改了配置键就在这里增删对应行
 2. 三种网络模式的取值
    - 第 258 行：`make_listen()`，三种模式的监听地址
    - 第 267 行：`make_dns()`，三种模式的 DNS 服务器
-   - 第 276 行：`make_dns_pref()`，三种模式的 `dns-ip-preference`（注意：仅 IPv6 模式固定为 `ipv4-only`，即 IPv6 入站 + IPv4 出站，不要改回 `ipv6-only`）
+   - 第 273 行：`make_dns_pref()`，三种模式统一 `ipv4-only`（IPv6 入站 + 仅 IPv4 出站，不要改回 `prefer-ipv4` / `ipv6-only`）
 3. 客户端节点行
-   - 第 433 行开始：`export_snell_info()`
-   - 第 439-440 行：`EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
-   - 第 444、448、451 行：IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
+   - 第 425 行开始：`export_snell_info()`
+   - 第 431-432 行：`EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
+   - 第 436、440、443 行：IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
 4. 服务启动参数
-   - 第 890 行：`ExecStart=/usr/local/bin/snell-server -c ... --loglevel warning`
+   - 第 882 行：`ExecStart=/usr/local/bin/snell-server -c ... --loglevel warning`
    - 新版命令行参数有变化就改这一行
 5. 安装依赖（一般不用动）
-   - 第 772 行：Debian/Ubuntu 的依赖安装列表；新版本有新依赖才加
+   - 第 764 行：Debian/Ubuntu 的依赖安装列表；新版本有新依赖才加
 
 ## 五、推送仓库
 
@@ -73,3 +73,4 @@
 - 版本号（第 23 行）、vendor 文件名、README 里的哈希三者必须对应同一个版本
 - 重装时端口和密码如果和原来不同，客户端 Surge 节点行也要跟着换
 - 官方说明没提配置变化时，只改第 23 行、vendor、README 三处即可
+- 三种模式出站统一 `dns-ip-preference = ipv4-only`（IPv6 入站 + 仅 IPv4 出站），升级时不要改回 `prefer-ipv4` 或 `ipv6-only`

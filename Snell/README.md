@@ -59,9 +59,9 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - 新增 `mode`：`default`（混淆 + AES）、`unshaped`（仅 AES，约快 10%）、`unsafe-raw`（明文，仅限内网）
 - 新增 `dns-ip-preference` 与 `dns` 配置，按服务器真实网络自动生成：
   - 仅 IPv4 服务器：`ipv4-only` + IPv4 DNS，入站 / 出站都是 IPv4
-  - 双栈服务器：`prefer-ipv4` + IPv4 DNS，入站可收 IPv4 / IPv6，出站 IPv4 优先；显式 IPv6 目标（如 MTProto `ipv6=true` 的 Telegram DC）仍可走 v6（与 AnyTLS 双栈行为一致）
+  - 双栈服务器：`ipv4-only` + IPv4 DNS，入站可收 IPv4 / IPv6，出站只用 IPv4（彻底关闭 IPv6 出站）
   - 纯 IPv6 服务器：`ipv6-only` + IPv6 DNS，入站 / 出站只能用 IPv6
-- 双栈或仅 IPv4 服务器手动选“仅 IPv6 入站”时：监听只开 IPv6，出站仍按真实网络
+- 双栈或仅 IPv4 服务器手动选“仅 IPv6 入站”时：监听只开 IPv6，出站仍是 IPv4
 - v6 移除 QUIC Proxy Mode，防火墙只需放行 TCP
 - PSK 由协议内派生为部署级流量特征，不同 PSK 的服务器流量特征不同；PSK 长度 12-255
 - systemd 以 nobody 运行，配置权限收紧为 640，节点信息 600
@@ -76,7 +76,6 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - 内存 ≥ 1G 时会关闭全部 Swap 并安装开机禁用服务
 - 卸载不会还原以上系统改动
 - 仅适合“服务器只跑代理”的场景
-- Surge 的 `[MTProto] ipv6 = true` 需要 Snell 服务端允许显式 IPv6 出站：双栈脚本默认 `prefer-ipv4` 可以配合；如果手动改成 `ipv4-only`，MTProto 必须设为 `ipv6 = false`
 
 ## 官方安装包 SHA256（vendor/ 备用源）
 

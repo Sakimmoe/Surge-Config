@@ -1,25 +1,10 @@
 # Snell 脚本审查与变更记录
 
-## 出入站模式对齐 AnyTLS 脚本
-
-按 [Sakimmoe/AnyTLS](https://github.com/Sakimmoe/AnyTLS) 的三种网络模式对齐：
-
-- 仅 IPv4：入站 `0.0.0.0:端口`，出站 `ipv4-only` + IPv4 DNS
-- 双栈：入站 v4 / v6 都收（等价 AnyTLS 的 `::` 监听），出站 `prefer-ipv4` + IPv4 DNS（等价 AnyTLS 的域名 `ipv4_only`，且显式 IPv6 目标可用）
-- 仅 IPv6：入站 `[::]:端口`，出站 `ipv6-only` + IPv6 DNS
-- 面板文案与 AnyTLS 一致：双栈(v6入+v4出解锁)
-
-## 双栈出站改回 prefer-ipv4（兼容 MTProto ipv6=true）
-
-- 用户需要 `[MTProto] ipv6 = true`（Telegram 走 IPv6 DC），而 `ipv4-only` 会拒绝显式 IPv6 目标，导致 TG 代理不通
-- 双栈改为 `prefer-ipv4`：域名解析 IPv4 优先（保持 v4 解锁），显式 IPv6 目标（Telegram DC）仍可走 v6，与之前 AnyTLS“v4 出站优先”的行为一致
-- 仅 v4 服务器保持 `ipv4-only`，纯 IPv6 服务器保持 `ipv6-only`
-
 ## 出站策略按服务器真实网络（仅 v4 / 双栈 / 仅 v6）
 
 - 出站地址族不再按“监听模式”决定，而是按安装时探测到的服务器真实网络（写入 `.netstack`）：
   - 仅 IPv4 服务器：`listen = 0.0.0.0:端口`，`dns-ip-preference = ipv4-only`，DNS 用 IPv4
-  - 双栈服务器：`listen = 0.0.0.0:端口,[::]:端口`，`dns-ip-preference = prefer-ipv4`（IPv6 可入站，出站 IPv4 优先，显式 IPv6 目标可用）
+  - 双栈服务器：`listen = 0.0.0.0:端口,[::]:端口`，`dns-ip-preference = ipv4-only`（IPv6 可入站，出站只用 IPv4）
   - 纯 IPv6 服务器：`listen = [::]:端口`，`dns-ip-preference = ipv6-only`，DNS 用 IPv6（没有 IPv4 时只能用 IPv6 出站，否则无法联网）
 - 双栈 / 仅 IPv4 服务器手动选“仅 IPv6 入站”时：监听只开 IPv6，出站仍按真实网络走 IPv4
 - 旧安装没有 `.netstack` 时按有 IPv4 处理（ipv4-only + IPv4 DNS），纯 IPv6 老安装需要重装一次生成记录
@@ -148,6 +133,6 @@
 ## 三种服务器网络与监听模式的配置对照（已按官方帮助/示例核对，未在真实服务器实测）
 
 - 仅 IPv4 服务器：`listen = 0.0.0.0:端口` + `dns-ip-preference = ipv4-only` + IPv4 DNS
-- 双栈服务器：`listen = 0.0.0.0:端口,[::]:端口` + `dns-ip-preference = prefer-ipv4` + IPv4 DNS（IPv6 入站 + IPv4 出站优先）
+- 双栈服务器：`listen = 0.0.0.0:端口,[::]:端口` + `dns-ip-preference = ipv4-only` + IPv4 DNS（IPv6 入站 + 仅 IPv4 出站）
 - 纯 IPv6 服务器：`listen = [::]:端口` + `dns-ip-preference = ipv6-only` + IPv6 DNS
-- 双栈服务器手动选“仅 IPv6 入站”：`listen = [::]:端口` + `dns-ip-preference = prefer-ipv4`（出站仍按真实网络）
+- 双栈服务器手动选“仅 IPv6 入站”：`listen = [::]:端口` + `dns-ip-preference = ipv4-only`（出站仍走 IPv4）

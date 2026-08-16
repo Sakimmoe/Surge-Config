@@ -59,7 +59,7 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - 新增 `mode`：`default`（混淆 + AES）、`unshaped`（仅 AES，约快 10%）、`unsafe-raw`（明文，仅限内网）
 - 新增 `dns-ip-preference` 与 `dns` 配置，按服务器真实网络自动生成：
   - 仅 IPv4 服务器：`ipv4-only` + IPv4 DNS，入站 / 出站都是 IPv4
-  - 双栈服务器：`prefer-ipv4` + IPv4 DNS，入站可收 IPv4 / IPv6，出站 IPv4 优先；显式 IPv6 目标（如 MTProto `ipv6=true` 的 Telegram DC）仍可走 v6
+  - 双栈服务器：`prefer-ipv4` + IPv4 DNS，入站可收 IPv4 / IPv6，出站 IPv4 优先；显式 IPv6 目标（如 MTProto `ipv6=true` 的 Telegram DC）仍可走 v6（与 AnyTLS 双栈行为一致）
   - 纯 IPv6 服务器：`ipv6-only` + IPv6 DNS，入站 / 出站只能用 IPv6
 - 双栈或仅 IPv4 服务器手动选“仅 IPv6 入站”时：监听只开 IPv6，出站仍按真实网络
 - v6 移除 QUIC Proxy Mode，防火墙只需放行 TCP

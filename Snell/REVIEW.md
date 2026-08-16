@@ -1,5 +1,14 @@
 # Snell 脚本审查与变更记录
 
+## 出入站模式对齐 AnyTLS 脚本
+
+按 [Sakimmoe/AnyTLS](https://github.com/Sakimmoe/AnyTLS) 的三种网络模式对齐：
+
+- 仅 IPv4：入站 `0.0.0.0:端口`，出站 `ipv4-only` + IPv4 DNS
+- 双栈：入站 v4 / v6 都收（等价 AnyTLS 的 `::` 监听），出站 `prefer-ipv4` + IPv4 DNS（等价 AnyTLS 的域名 `ipv4_only`，且显式 IPv6 目标可用）
+- 仅 IPv6：入站 `[::]:端口`，出站 `ipv6-only` + IPv6 DNS
+- 面板文案与 AnyTLS 一致：双栈(v6入+v4出解锁)
+
 ## 双栈出站改回 prefer-ipv4（兼容 MTProto ipv6=true）
 
 - 用户需要 `[MTProto] ipv6 = true`（Telegram 走 IPv6 DC），而 `ipv4-only` 会拒绝显式 IPv6 目标，导致 TG 代理不通

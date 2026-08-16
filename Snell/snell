@@ -97,7 +97,7 @@ install_status_text() {
   if [[ -f "$STACK_FILE" ]]; then
     local stack=$(cat "$STACK_FILE" 2>/dev/null || echo "")
     case "$stack" in
-      dual)   stack_info=" | ${Cyan}双栈(v6入+仅v4出)${Font}" ;;
+      dual)   stack_info=" | ${Cyan}双栈(v6入+v4出优先)${Font}" ;;
       v4only) stack_info=" | ${Cyan}仅IPv4${Font}" ;;
       v6only) stack_info=" | ${Cyan}仅IPv6入站${Font}" ;;
     esac
@@ -285,11 +285,13 @@ make_dns() {
 
 make_dns_pref() {
   # 出站地址族按真实网络：
-  # - 有 IPv4（仅 v4 / 双栈）：只用 IPv4 出站，IPv6 仍可入站
+  # - 仅 v4 服务器：只用 IPv4 出站
+  # - 双栈：IPv4 出站优先，但显式 IPv6 目标（如 MTProto ipv6=true 的 Telegram DC）仍可走 v6
   # - 纯 IPv6：只能 IPv6 出站，否则无法联网
   case "$(get_egress_stack)" in
+    v4only) echo "ipv4-only" ;;
     v6only) echo "ipv6-only" ;;
-    *)      echo "ipv4-only" ;;
+    *)      echo "prefer-ipv4" ;;
   esac
 }
 
@@ -837,7 +839,7 @@ EOF
   if [[ "$IP_STACK" == "dual" ]]; then
     echo -e "当前服务器 IPv4: ${BGreen}${IPV4}${Font}"
     echo -e "当前服务器 IPv6: ${BGreen}${IPV6}${Font}"
-    echo -e "栈类型: ${BGreen}双栈 (IPv6 入站 + 仅 IPv4 出站)${Font}"
+    echo -e "栈类型: ${BGreen}双栈 (IPv6 入站 + IPv4 出站优先)${Font}"
   elif [[ "$IP_STACK" == "v4only" ]]; then
     echo -e "当前服务器 IPv4: ${BGreen}${IPV4}${Font}"
     echo -e "栈类型: ${BGreen}仅 IPv4${Font}"
@@ -1069,7 +1071,7 @@ change_listen_mode() {
   hr
 
   local CUR_STACK=$(cat "$STACK_FILE" 2>/dev/null || echo "unknown")
-  local CUR_TEXT="双栈 (IPv6 入站 + 仅 IPv4 出站)"
+  local CUR_TEXT="双栈 (IPv6 入站 + IPv4 出站优先)"
   case "$CUR_STACK" in
     v4only) CUR_TEXT="仅 IPv4" ;;
   v6only) CUR_TEXT="仅 IPv6 入站（出站按服务器实际网络）" ;;
@@ -1077,7 +1079,7 @@ change_listen_mode() {
 
   echo -e "当前模式: ${BGreen}${CUR_TEXT}${Font}"
   echo " 1. 仅 IPv4"
-  echo " 2. 双栈 (IPv6 入站 + 仅 IPv4 出站)"
+  echo " 2. 双栈 (IPv6 入站 + IPv4 出站优先)"
   echo " 3. 仅 IPv6 入站（出站按服务器实际网络）"
   local input
   read -rp "请选择 [1-3]: " input

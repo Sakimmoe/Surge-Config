@@ -23,5 +23,4 @@ YouTube 去广告模块，基于 Maasea 的 Youtube (Music) Enhance 修改。
 | 文件 | 来源 | 说明 |
 |---|---|---|
 | iOSUpdate.sgmodule | [ConnersHua/RuleGo](https://github.com/ConnersHua/RuleGo) | 屏蔽 iOS/iPadOS 系统更新 |
-| DNS防泄露.beta.sgmodule | [QingRex/LoonKissSurge](https://github.com/QingRex/LoonKissSurge) | 原模块仅含模块信息头，无实际规则 |
 | skip-proxy-lists.sgmodule | [mieqq/mieqq](https://github.com/mieqq/mieqq) | 跳过部分应用的代理检测 |

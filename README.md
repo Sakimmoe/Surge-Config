@@ -7,6 +7,10 @@
 ```text
 Surge-Config/
 ├── Surge.conf                              # Surge 主配置
+├── Rule/
+│   ├── blocked.list                        # 国外代理分流列表
+│   ├── cn.list                             # 国内直连分流列表
+│   └── apple.list                          # Apple 分流列表
 ├── Modules/
 │   ├── README.md                           # 模块说明
 │   ├── YouTubeEnhance-Original.sgmodule    # YouTube 去广告原版

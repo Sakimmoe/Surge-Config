@@ -76,6 +76,7 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - 内存 ≥ 1G 时会关闭全部 Swap 并安装开机禁用服务
 - 卸载不会还原以上系统改动
 - 仅适合“服务器只跑代理”的场景
+- 如果 Surge 里开了 `[MTProto] ipv6 = true`，Telegram 会走 IPv6 DC，但本脚本在有 IPv4 时把 Snell 出站设为 `ipv4-only`，会被服务端拒绝；MTProto 请用 `ipv6 = false`
 
 ## 官方安装包 SHA256（vendor/ 备用源）
 

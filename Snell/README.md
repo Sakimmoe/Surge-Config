@@ -29,7 +29,7 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 ## 日志与清理
 
 - Snell 日志写入 systemd journal，服务以 `--loglevel warning` 运行，日常日志量很小
-- 每周日 07:07 自动清理：apt 残留依赖（`--purge`）、journal 保留 3 天 / 30M（含 Snell 日志）、Snell 更新残留、/tmp 中 7 天以上的文件
+- 每周日 07:07 自动清理：apt 残留依赖（`--purge`）与索引缓存（pkgcache.bin）、journal 保留 3 天 / 30M（含 Snell 日志）、Snell 更新残留、/tmp 中 7 天以上的文件
 - 旧版本装的服务在重新运行本脚本时会自动补上日志级别限制，不需要重装
 
 ## 客户端配置（Surge）

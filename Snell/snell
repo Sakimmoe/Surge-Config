@@ -408,6 +408,8 @@ set -e
 apt-get clean >/dev/null 2>&1 || true
 apt-get autoclean -y >/dev/null 2>&1 || true
 apt-get autoremove --purge -y >/dev/null 2>&1 || true
+# apt 索引缓存（pkgcache.bin），apt 会自动重建，删除安全
+rm -f /var/cache/apt/pkgcache.bin /var/cache/apt/srcpkgcache.bin >/dev/null 2>&1 || true
 
 # systemd 日志（含 Snell）：保留最近 3 天且总大小不超过 30M
 journalctl --vacuum-time=3d --vacuum-size=30M >/dev/null 2>&1 || true

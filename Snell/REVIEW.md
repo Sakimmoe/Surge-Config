@@ -1,5 +1,12 @@
 # Snell 脚本审查与变更记录
 
+## 安全性与可靠性小修
+
+- `check_system_ip()` 增加 IP 缓存（`/etc/snell/.ips`）：公网探测失败时回退到上次成功保存的 IP，避免节点行输出“服务器IP”占位符
+- UFW 配置不再用不可靠的 `judge`：改为实际检查 `ufw status`，确认启用才显示完成，失败只警告不中断安装
+- 删除“依赖安装”的假完成提示：改为实际检查 curl / unzip，缺失才报错退出
+- 官方源下载失败提示改为“无 IPv6 或网络问题”，不再误报
+
 ## 清理脚本补充 apt 索引缓存
 
 - `apt-get clean` 不会删除 `/var/cache/apt/pkgcache.bin` 与 `srcpkgcache.bin`（apt 的索引缓存，通常各几十 M）

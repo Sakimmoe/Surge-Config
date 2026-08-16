@@ -216,8 +216,21 @@ read_mode_interactive() {
 }
 
 check_system_ip() {
-  IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
-  IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org 2>/dev/null || echo "")
+  local IP_CACHE="${CONFIG_DIR}/.ips"
+  local new4 new6
+  new4=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+  new6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org 2>/dev/null || echo "")
+
+  # 探测失败时回退到上次成功保存的 IP，避免节点行输出占位符
+  if [[ -z "$new4" && -f "$IP_CACHE" ]]; then
+    new4=$(sed -n '1p' "$IP_CACHE" 2>/dev/null || true)
+  fi
+  if [[ -z "$new6" && -f "$IP_CACHE" ]]; then
+    new6=$(sed -n '2p' "$IP_CACHE" 2>/dev/null || true)
+  fi
+
+  IPV4=$new4
+  IPV6=$new6
   MAIN_IP=$([ -n "$IPV4" ] && echo "$IPV4" || echo "$IPV6")
 
   if [[ -n "$IPV4" && -n "$IPV6" ]]; then
@@ -228,6 +241,12 @@ check_system_ip() {
     IP_STACK="v6only"
   else
     IP_STACK="unknown"
+  fi
+
+  # 探测成功则更新缓存，供下次失败时回退
+  if [[ -n "$IPV4" || -n "$IPV6" ]]; then
+    mkdir -p "$CONFIG_DIR" 2>/dev/null || true
+    printf '%s\n%s\n' "$IPV4" "$IPV6" > "$IP_CACHE" 2>/dev/null || true
   fi
 }
 
@@ -322,7 +341,7 @@ download_snell() {
   MIRROR="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/vendor/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip"
 
   if ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$URL"; then
-    print_warn "官方源 (dl.nssurge.com) 无 IPv6，尝试 GitHub 备用源..."
+    print_warn "官方源 (dl.nssurge.com) 下载失败（无 IPv6 或网络问题），尝试 GitHub 备用源..."
     if ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$MIRROR" && ! wget --timeout=30 -q -O "${TMP_DL}/snell-server.pkg" "$MIRROR" 2>/dev/null; then
       rm -rf "$TMP_DL"
       return 1
@@ -392,7 +411,11 @@ setup_ufw() {
   ufw allow "${PORT}/tcp" comment 'Snell TCP' >/dev/null 2>&1 || true
   ufw --force enable >/dev/null 2>&1 || true
   ufw reload >/dev/null 2>&1 || true
-  judge "UFW 防火墙配置"
+  if ufw status 2>/dev/null | grep -q "Status: active"; then
+    print_ok "UFW 防火墙配置 完成"
+  else
+    print_warn "UFW 未能确认启用，请手动检查: ufw status"
+  fi
 }
 
 # ==================== 定时任务 ====================
@@ -789,11 +812,10 @@ install_snell() {
     yum update -y >/dev/null 2>&1 || true
     yum install -y curl unzip cronie ca-certificates >/dev/null 2>&1 || true
   fi
-  judge "依赖安装"
-
   for c in curl unzip; do
     command -v "$c" >/dev/null 2>&1 || { print_err "缺少必要依赖: $c"; exit 1; }
   done
+  print_ok "必要依赖检查通过"
 
   # 设置时区为上海
   print_info "设置时区为 Asia/Shanghai..."

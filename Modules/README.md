@@ -17,3 +17,10 @@ YouTube 去广告模块，基于 Maasea 的 Youtube (Music) Enhance 修改。
 ## 推荐组合
 
 手机使用原版模块；电脑若必须走手机 Surge 代理，请在 Windows 安装并信任 Surge 的 MITM 根证书，两边即可同时正常。
+
+## 其他模块
+
+| 文件 | 来源 | 说明 |
+|---|---|---|
+| iOSUpdate.sgmodule | [ConnersHua/RuleGo](https://github.com/ConnersHua/RuleGo) | 屏蔽 iOS/iPadOS 系统更新 |
+| skip-proxy-lists.sgmodule | [mieqq/mieqq](https://github.com/mieqq/mieqq) | 跳过部分应用的代理检测 |

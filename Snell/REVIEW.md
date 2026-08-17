@@ -1,5 +1,14 @@
 # Snell 脚本审查与变更记录
 
+## 网络优化改为最简版（BBR + fq + TFO）
+
+- 用户反馈原参数“太猛”，按需求把 `/etc/sysctl.conf` 精简为三行：
+  - `net.core.default_qdisc = fq`
+  - `net.ipv4.tcp_congestion_control = bbr`
+  - `net.ipv4.tcp_fastopen = 3`（保留 TFO）
+- 移除大缓冲区、somaxconn、syn backlog、tcp_rmem/wmem、adv_win_scale、sack、timestamps、kernel.panic、swappiness 等自定义项，恢复系统默认
+- 菜单 9 与重装都会写入这套最简参数
+
 ## 安全性与可靠性小修
 
 - `check_system_ip()` 增加 IP 缓存（`/etc/snell/.ips`）：公网探测失败时回退到上次成功保存的 IP，避免节点行输出“服务器IP”占位符

@@ -66,6 +66,7 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - PSK 由协议内派生为部署级流量特征，不同 PSK 的服务器流量特征不同；PSK 长度 12-255
 - systemd 以 nobody 运行，配置权限收紧为 640，节点信息 600
 - 安装依赖只保留 Snell 实际用到的：curl、unzip、UFW、iproute2、cron、ca-certificates（不再装 wget / tar / firewalld）
+- 网络优化只保留最简三项：BBR、fq、TCP Fast Open（`tcp_fastopen = 3`），其余参数保持系统默认
 - 官方下载源 `dl.nssurge.com` 只有 IPv4，纯 IPv6 服务器会自动改用仓库内 `vendor/` 的官方二进制备用源
 
 ## 注意事项

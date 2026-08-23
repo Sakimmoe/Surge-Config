@@ -9,6 +9,8 @@ DOMAIN-KEYWORD,whatsapp
 DOMAIN-KEYWORD,youtube
 DOMAIN-SUFFIX,ampproject.org
 DOMAIN-SUFFIX,android.com
+DOMAIN-SUFFIX,booth.pm
+DOMAIN-SUFFIX,fanbox.cc
 DOMAIN-SUFFIX,fb.me
 DOMAIN-SUFFIX,fbcdn.net
 DOMAIN-SUFFIX,githubusercontent.com
@@ -18,6 +20,12 @@ DOMAIN-SUFFIX,nodeseek.com
 DOMAIN-SUFFIX,noyu.moe
 DOMAIN-SUFFIX,oculus.com
 DOMAIN-SUFFIX,oculuscdn.com
+DOMAIN-SUFFIX,pixiv.cat
+DOMAIN-SUFFIX,pixiv.co.jp
+DOMAIN-SUFFIX,pixiv.me
+DOMAIN-SUFFIX,pixiv.net
+DOMAIN-SUFFIX,pixiv.org
+DOMAIN-SUFFIX,pximg.net
 DOMAIN-SUFFIX,telegram.org
 DOMAIN-SUFFIX,tw
 DOMAIN-SUFFIX,twimg.com

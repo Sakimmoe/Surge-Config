@@ -1,27 +1,27 @@
-DOMAIN-SUFFIX,aaplimg.com,DIRECT
-DOMAIN-SUFFIX,apple.co,DIRECT
-DOMAIN-SUFFIX,apple.com,DIRECT
-DOMAIN-SUFFIX,cdn-apple.com,DIRECT
-DOMAIN-SUFFIX,CN,DIRECT
-DOMAIN-SUFFIX,icloud-content.com,DIRECT
-DOMAIN-SUFFIX,icloud.com,DIRECT
-DOMAIN-SUFFIX,itunes.apple.com,DIRECT
-DOMAIN-SUFFIX,itunes.com,DIRECT
-DOMAIN-SUFFIX,kokonoyu.com,DIRECT
-DOMAIN-SUFFIX,lookup-api.apple.com,DIRECT
-DOMAIN-SUFFIX,me.com,DIRECT
-DOMAIN-SUFFIX,mzstatic.com,DIRECT
-DOMAIN-KEYWORD,.tmall.,DIRECT
-DOMAIN-KEYWORD,alicdn,DIRECT
-DOMAIN-KEYWORD,alipay,DIRECT
-DOMAIN-KEYWORD,aliyun,DIRECT
-DOMAIN-KEYWORD,baidu,DIRECT
-DOMAIN-KEYWORD,taobao,DIRECT
-USER-AGENT,com.apple.appstored*,DIRECT
-USER-AGENT,MApi*,DIRECT
-USER-AGENT,MicroMessenger Client,DIRECT
-USER-AGENT,WeChat*,DIRECT
-USER-AGENT,手机淘宝*,DIRECT
-PROCESS-NAME,storedownloadd,DIRECT
-IP-CIDR,198.11.136.0/24,DIRECT,no-resolve
-IP-CIDR,198.11.188.0/25,DIRECT,no-resolve
+DOMAIN-SUFFIX,aaplimg.com
+DOMAIN-SUFFIX,apple.co
+DOMAIN-SUFFIX,apple.com
+DOMAIN-SUFFIX,cdn-apple.com
+DOMAIN-SUFFIX,CN
+DOMAIN-SUFFIX,icloud-content.com
+DOMAIN-SUFFIX,icloud.com
+DOMAIN-SUFFIX,itunes.apple.com
+DOMAIN-SUFFIX,itunes.com
+DOMAIN-SUFFIX,kokonoyu.com
+DOMAIN-SUFFIX,lookup-api.apple.com // Dictionary
+DOMAIN-SUFFIX,me.com
+DOMAIN-SUFFIX,mzstatic.com // App Store & iTunes Images
+DOMAIN-KEYWORD,.tmall.
+DOMAIN-KEYWORD,alicdn
+DOMAIN-KEYWORD,alipay
+DOMAIN-KEYWORD,aliyun
+DOMAIN-KEYWORD,baidu
+DOMAIN-KEYWORD,taobao
+USER-AGENT,com.apple.appstored\* // iOS App Store
+USER-AGENT,MApi\*
+USER-AGENT,MicroMessenger Client
+USER-AGENT,WeChat\*
+USER-AGENT,%E6%89%8B%E6%9C%BA%E6%B7%98%E5%AE%9D\*
+PROCESS-NAME,storedownloadd // Mac App Store
+IP-CIDR,198.11.136.0/24,no-resolve
+IP-CIDR,198.11.188.0/25,no-resolve

@@ -259,6 +259,85 @@ get_arch() {
   esac
 }
 
+# ==================== 系统依赖自动安装 ====================
+# 自动安装 curl/unzip 等依赖；首次失败后刷新软件源并显示真实错误重试，
+# 避免“静默安装失败 -> 只报缺少 unzip -> 直接退出”的问题
+pm_install() {
+  local pm="$1"; shift
+  case "$pm" in
+    apt) apt-get install -y -qq "$@" ;;
+    dnf) dnf install -y -q "$@" ;;
+    yum) yum install -y -q "$@" ;;
+  esac
+}
+
+pm_refresh() {
+  local pm="$1"
+  case "$pm" in
+    apt) apt-get update -qq ;;
+    dnf) dnf makecache -y ;;
+    yum) yum makecache ;;
+  esac
+}
+
+install_deps() {
+  local pm="" cmd="" missing=0 pkgs=""
+
+  for cmd in curl unzip; do
+    command -v "$cmd" >/dev/null 2>&1 || missing=1
+  done
+
+  if command -v apt-get >/dev/null 2>&1; then
+    pm="apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    pm="dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    pm="yum"
+  fi
+
+  # 系统没有 apt/dnf/yum 时：依赖齐全则放行，否则给出手动安装指引
+  if [[ -z "$pm" ]]; then
+    if [[ $missing -eq 1 ]]; then
+      print_err "未检测到 apt-get/dnf/yum，无法自动安装 curl/unzip"
+      print_err "请先手动安装这两个依赖后再运行本脚本"
+      exit 1
+    fi
+    return 0
+  fi
+
+  # 必需依赖一组安装；ufw 是可选组件，单独尝试，不参与必需检查
+  case "$pm" in
+    apt)        pkgs="curl unzip ca-certificates iproute2 cron" ;;
+    dnf|yum)    pkgs="curl unzip ca-certificates cronie" ;;
+  esac
+
+  print_info "使用 ${pm} 安装依赖: ${pkgs}"
+  # shellcheck disable=SC2086
+  if ! pm_install "$pm" $pkgs; then
+    print_warn "依赖首次安装未成功，正在刷新软件源并带详细输出重试..."
+    sleep 3
+    pm_refresh "$pm" || true
+    case "$pm" in
+      apt)     apt-get install -y $pkgs || true ;;
+      dnf)     dnf install -y $pkgs || true ;;
+      yum)     yum install -y $pkgs || true ;;
+    esac
+  fi
+
+  if [[ "$pm" == "apt" ]] && ! command -v ufw >/dev/null 2>&1; then
+    apt-get install -y -qq ufw >/dev/null 2>&1 || true
+  fi
+
+  for cmd in curl unzip; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      print_err "必要依赖 ${cmd} 安装失败，请检查上方软件源/网络错误后手动安装再重试"
+      print_err "Debian/Ubuntu: apt-get update && apt-get install -y ${cmd}"
+      print_err "CentOS/RHEL:   yum install -y ${cmd}   (或 dnf install -y ${cmd})"
+      exit 1
+    fi
+  done
+}
+
 get_service_group() {
   local g
   g=$(sed -n 's/^Group=//p' "$SNELL_SERVICE_FILE" 2>/dev/null | head -1)
@@ -789,21 +868,8 @@ install_snell() {
     print_ok "旧服务已停止"
   fi
 
-  # 依赖
-  print_info "安装依赖..."
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq curl unzip ufw iproute2 cron ca-certificates >/dev/null 2>&1 || true
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf update -y >/dev/null 2>&1 || true
-    dnf install -y curl unzip cronie ca-certificates >/dev/null 2>&1 || true
-  elif command -v yum >/dev/null 2>&1; then
-    yum update -y >/dev/null 2>&1 || true
-    yum install -y curl unzip cronie ca-certificates >/dev/null 2>&1 || true
-  fi
-  for c in curl unzip; do
-    command -v "$c" >/dev/null 2>&1 || { print_err "缺少必要依赖: $c"; exit 1; }
-  done
+  # 依赖（自动安装 curl/unzip 等；失败会显示真实原因并重试一次）
+  install_deps
   print_ok "必要依赖检查通过"
 
   # 设置时区为上海

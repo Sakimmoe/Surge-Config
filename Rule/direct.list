@@ -1,4 +1,10 @@
 DOMAIN,www.shizukululu.net
+DOMAIN,aod-ssl.itunes.apple.com
+DOMAIN,aod.itunes.apple.com
+DOMAIN,audio-ssl.itunes.apple.com
+DOMAIN,audio.itunes.apple.com
+DOMAIN,mvod.itunes.apple.com
+DOMAIN,streamingaudio.itunes.apple.com
 DOMAIN-SUFFIX,aaplimg.com
 DOMAIN-SUFFIX,apple.co
 DOMAIN-SUFFIX,apple.com
@@ -12,6 +18,9 @@ DOMAIN-SUFFIX,kokonoyu.com
 DOMAIN-SUFFIX,lookup-api.apple.com // Dictionary
 DOMAIN-SUFFIX,me.com
 DOMAIN-SUFFIX,mzstatic.com // App Store & iTunes Images
+DOMAIN-SUFFIX,applemusic.com
+DOMAIN-SUFFIX,blobstore.apple.com
+DOMAIN-SUFFIX,music.apple.com
 DOMAIN-KEYWORD,.tmall.
 DOMAIN-KEYWORD,alicdn
 DOMAIN-KEYWORD,alipay
@@ -25,4 +34,6 @@ USER-AGENT,MApi\*
 USER-AGENT,MicroMessenger Client
 USER-AGENT,WeChat\*
 USER-AGENT,%E6%89%8B%E6%9C%BA%E6%B7%98%E5%AE%9D\*
+USER-AGENT,Music*
 PROCESS-NAME,storedownloadd // Mac App Store
+PROCESS-NAME,Music

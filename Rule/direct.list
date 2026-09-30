@@ -16,6 +16,7 @@ DOMAIN-SUFFIX,itunes.apple.com
 DOMAIN-SUFFIX,itunes.com
 DOMAIN-SUFFIX,kokonoyu.com
 DOMAIN-SUFFIX,lookup-api.apple.com // Dictionary
+DOMAIN-SUFFIX,mail.noyu.moe
 DOMAIN-SUFFIX,me.com
 DOMAIN-SUFFIX,mzstatic.com // App Store & iTunes Images
 DOMAIN-SUFFIX,applemusic.com

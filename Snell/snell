@@ -31,7 +31,7 @@ MODE_FILE="${CONFIG_DIR}/.mode"
 NET_NOFILE_LIMIT=1048576
 SNELL_BIN="/usr/local/bin/snell-server"
 SNELL_VERSION="v6.0.0rc2"
-SHELL_VERSION="0.1.0"
+SHELL_VERSION="0.1.1"
 
 # ==================== 重启后依然生效的系统配置 ====================
 # 内核参数：只写 /etc/sysctl.d/，不再碰 /etc/sysctl.conf（Debian 13 已不读该文件）
@@ -344,9 +344,11 @@ install_deps() {
   fi
 
   # 必需依赖一组安装；ufw 是可选组件，单独尝试，不参与必需检查
+  # systemd-timesyncd 一并装上：Debian 13 的精简 cloud 镜像默认不带时间同步守护进程，
+  # 不装的话 timedatectl 会显示 "NTP service: n/a / System clock synchronized: no"
   case "$pm" in
-    apt)        pkgs="curl unzip ca-certificates iproute2 cron" ;;
-    dnf|yum)    pkgs="curl unzip ca-certificates cronie" ;;
+    apt)        pkgs="curl unzip ca-certificates iproute2 cron systemd-timesyncd" ;;
+    dnf|yum)    pkgs="curl unzip ca-certificates cronie chrony" ;;
   esac
 
   print_info "使用 ${pm} 安装依赖: ${pkgs}"
@@ -854,10 +856,14 @@ if [ -f /usr/share/zoneinfo/Asia/Shanghai ]; then
   fi
 fi
 
-# 时间同步服务被禁用时重新启用
-if [ -f /etc/systemd/system/systemd-timesyncd.service ] || [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
-  systemctl is-enabled systemd-timesyncd >/dev/null 2>&1 || systemctl enable systemd-timesyncd >/dev/null 2>&1
-  systemctl is-active systemd-timesyncd >/dev/null 2>&1 || systemctl start systemd-timesyncd >/dev/null 2>&1
+# 时间同步服务被停掉/禁用时重新启用（系统可能用 chrony 而不是 systemd-timesyncd）
+if command -v systemctl >/dev/null 2>&1; then
+  for s in systemd-timesyncd chrony chronyd ntp ntpd openntpd; do
+    systemctl list-unit-files "$s.service" >/dev/null 2>&1 || continue
+    systemctl is-enabled "$s" >/dev/null 2>&1 || systemctl enable "$s" >/dev/null 2>&1
+    systemctl is-active "$s" >/dev/null 2>&1 || systemctl start "$s" >/dev/null 2>&1
+    break
+  done
 fi
 
 exit 0
@@ -965,6 +971,38 @@ apply_network_optimization() {
   print_ok "网络优化已应用（内核参数写入 ${SYSCTL_FILE}，开机自动重申）"
 }
 
+# 启用系统里实际存在的时间同步守护进程
+# Debian 13 精简 cloud 镜像不带 systemd-timesyncd，必须回退到 chrony，
+# 否则会出现 "NTP service: n/a / System clock synchronized: no"
+enable_time_sync() {
+  local svc="" have=0
+  for s in systemd-timesyncd chrony chronyd ntp ntpd openntpd; do
+    systemctl list-unit-files "$s.service" >/dev/null 2>&1 || continue
+    have=1
+    if [[ -z "$svc" ]]; then
+      svc="$s"
+      systemctl enable --now "$s" >/dev/null 2>&1 || true
+    else
+      # 系统里装了多个时间同步服务会互相打架，多余的停掉，只留第一个可用的
+      systemctl disable --now "$s" >/dev/null 2>&1 || true
+    fi
+  done
+
+  if [[ "$have" -eq 0 ]]; then
+    print_warn "未找到可用时间同步服务（系统不带 systemd-timesyncd/chrony）"
+    if command -v apt-get >/dev/null 2>&1; then
+      print_info "尝试安装 chrony..."
+      if apt-get install -y -qq chrony >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq chrony >/dev/null 2>&1; }; then
+        systemctl enable --now chrony >/dev/null 2>&1 || true
+        svc="chrony"
+      fi
+    fi
+  fi
+
+  [[ -n "$svc" ]] && echo "$svc"
+  return 0
+}
+
 # 时区 + 时间同步（重启后同样保持）
 setup_timezone() {
   print_info "设置时区为 ${TZ_NAME} 并启用时间同步..."
@@ -979,15 +1017,19 @@ setup_timezone() {
   if command -v timedatectl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     timedatectl set-ntp true >/dev/null 2>&1 || true
   fi
-  systemctl enable systemd-timesyncd >/dev/null 2>&1 || true
-  systemctl start systemd-timesyncd >/dev/null 2>&1 || true
+
+  local TSVC
+  TSVC=$(enable_time_sync)
+  if [[ -n "$TSVC" ]]; then
+    print_ok "时间同步服务: ${TSVC}"
+  fi
 
   local now_tz
   now_tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo "")
   if [[ -n "$now_tz" && "$now_tz" != "$TZ_NAME" ]]; then
     print_warn "时区未确认生效（当前: ${now_tz}），重启后由 ${NET_TUNE_UNIT_NAME} 再纠正"
   else
-    print_ok "时区与时间同步 完成"
+    print_ok "时区设置 完成"
   fi
 }
 
@@ -1635,6 +1677,18 @@ health_check() {
   echo "=== 时区 / 时间 ==="
   timedatectl 2>/dev/null | sed -n '1,6p' || date
   echo "NTP 同步: $(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo '未知')"
+  local TS_FOUND=""
+  for _ts in systemd-timesyncd chrony chronyd ntp ntpd openntpd; do
+    if systemctl list-unit-files "${_ts}.service" >/dev/null 2>&1; then
+      TS_FOUND="${_ts}.service enabled=$(systemctl is-enabled "${_ts}" 2>/dev/null || echo -) active=$(systemctl is-active "${_ts}" 2>/dev/null || echo -)"
+      break
+    fi
+  done
+  if [[ -n "$TS_FOUND" ]]; then
+    echo "时间服务: ${TS_FOUND}"
+  else
+    echo "时间服务: 未安装（执行菜单 9 会自动安装 chrony）"
+  fi
   echo "=== 定时清理 ==="
   echo "cron: $(systemctl is-enabled cron 2>/dev/null || echo '未启用')"
   echo "任务文件: $( [[ -f "$CRON_CLEAN" ]] && echo '存在' || echo '缺失（执行菜单 9 可重建）' )"

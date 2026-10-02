@@ -1,5 +1,19 @@
 # Snell 脚本审查与变更记录
 
+## v0.1.1（修复 Debian 13 精简镜像没有时间同步服务）
+
+- 实机反馈（Debian 13 trixie / 内核 6.12 / systemd 257）：BBR 持久化修复已验证生效，但 `timedatectl` 显示
+  `System clock synchronized: no` + `NTP service: n/a`，`systemctl is-enabled systemd-timesyncd` 为 `not-found`
+- 原因：Debian 13 精简 cloud 镜像**不预装 `systemd-timesyncd`**，旧代码里 `systemctl enable systemd-timesyncd || true`
+  把失败静默吞掉了（和之前批评旧脚本的毛病一样）
+- 新增 `enable_time_sync()`：依次探测 `systemd-timesyncd` / `chrony` / `chronyd` / `ntp` / `ntpd` / `openntpd`，
+  启用第一个可用的、禁用多余的时间同步服务（多个同时跑会互相打架）；一个都没有时自动 `apt-get install chrony`
+- `install_deps()` 的 apt 包列表加入 `systemd-timesyncd`（Debian 13 上它就是 time-daemon 虚拟包的实现），
+  dnf/yum 分支改用 `chrony`
+- `snell-net-tune.sh` 不再硬编码 `systemd-timesyncd`，改为遍历可用的时间服务并确保 enabled + active
+- 一键体检新增「时间服务」行，明确显示实际使用的守护进程与 enabled/active 状态
+- 脚本版本升到 `0.1.1`
+
 ## v0.1.0（修复重启后 BBR / DNS / 时区失效）
 
 ### 根因：Debian 13 不再读取 `/etc/sysctl.conf`

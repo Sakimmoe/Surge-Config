@@ -28,7 +28,7 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 | --- | --- | --- |
 | BBR / fq / TCP Fast Open | `/etc/sysctl.d/99-snell-network.conf` + `/etc/modules-load.d/snell-bbr.conf` | `snell-net-tune.service` |
 | 静态 DNS（1.1.1.1 / 8.8.8.8） | `/etc/resolv.conf`（并 mask `systemd-resolved`） | `snell-dns.service` |
-| 时区 Asia/Shanghai + NTP | `/etc/localtime` + `systemd-timesyncd` | `snell-net-tune.service` |
+| 时区 Asia/Shanghai + NTP | `/etc/localtime` + `systemd-timesyncd` 或 `chrony` | `snell-net-tune.service` |
 | Swap 关闭 / 512M swapfile | `/etc/fstab` + `disable-swap.service` | `disable-swap.service` |
 | Snell 服务自启 | `snell.service` | systemd |
 
@@ -82,7 +82,8 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - v6 移除 QUIC Proxy Mode，防火墙只需放行 TCP
 - PSK 由协议内派生为部署级流量特征，不同 PSK 的服务器流量特征不同；PSK 长度 12-255
 - systemd 以 nobody 运行，配置权限收紧为 640，节点信息 600
-- 安装依赖只保留 Snell 实际用到的：curl、unzip、UFW、iproute2、cron、ca-certificates（不再装 wget / tar / firewalld）
+- 安装依赖只保留 Snell 实际用到的：curl、unzip、UFW、iproute2、cron、ca-certificates、systemd-timesyncd（不再装 wget / tar / firewalld）
+- Debian 13 精简 cloud 镜像不带 `systemd-timesyncd`，脚本会自动探测系统里可用的时间同步服务（`systemd-timesyncd` / `chrony` / `ntp`），一个都没有时自动安装 `chrony`，避免 `timedatectl` 一直显示 `NTP service: n/a`
 - 网络优化只保留最简三项：BBR、fq、TCP Fast Open（`tcp_fastopen = 3`），写入 `/etc/sysctl.d/99-snell-network.conf`，其余参数保持系统默认（不再覆盖 `/etc/sysctl.conf`）
 - 官方下载源 `dl.nssurge.com` 只有 IPv4，纯 IPv6 服务器会自动改用仓库内 `vendor/` 的官方二进制备用源
 

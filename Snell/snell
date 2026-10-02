@@ -104,7 +104,10 @@ ensure_root() {
 IN_INSTALL=false
 install_guard_exit() {
   local rc=$?
+  # 只在“父 shell 的安装流程”里兜底：
+  # 子 shell 正常收尾时不要重复执行（BASHPID 与父 shell 的 $$ 不同）
   [[ "$IN_INSTALL" == true ]] || return 0
+  [[ "$BASHPID" == "$$" ]] || return 0
   enforce_critical_settings >/dev/null 2>&1 || true
   return "$rc"
 }
@@ -1020,13 +1023,13 @@ setup_dns() {
 }
 
 # 安装过程中的任何失败退出，都把系统设置再兜一次，避免留下半成品
+# 两个自愈脚本都不在（未走过新版安装）时直接返回，绝不动系统文件
 enforce_critical_settings() {
   [[ -f "$SYSCTL_FILE" ]] || return 0
+  [[ -f "$DNS_SCRIPT" ]] || return 0
   sysctl --system >/dev/null 2>&1 || true
   sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1 || true
-  if [[ -x "$DNS_SCRIPT" ]]; then
-    bash "$DNS_SCRIPT" >/dev/null 2>&1 || true
-  fi
+  bash "$DNS_SCRIPT" >/dev/null 2>&1 || true
   enable_boot_persist
   return 0
 }
@@ -1314,10 +1317,17 @@ EOF
 
     # 导出信息
     export_snell_info "$PORT" "$PASS" "$MODE"
+
+    # 子 shell 自身收尾也清掉标记，避免它的 EXIT trap 重复兜底
+    IN_INSTALL=false
   ) || {
     trap - EXIT
     IN_INSTALL=false
     print_err "安装过程中断，请根据上面提示处理后重试"
+    # 已经下载好新二进制但服务没起来的情况，恢复一次旧服务更友好
+    if [[ -x "${SNELL_BIN}.bak" && -f "$SNELL_SERVICE_FILE" ]]; then
+      print_info "检测到旧版本备份，可在面板重试安装以自动回滚"
+    fi
     exit 1
   }
 

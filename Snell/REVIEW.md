@@ -1,5 +1,31 @@
 # Snell 脚本审查与变更记录
 
+## v0.1.0（修复重启后 BBR / DNS / 时区失效）
+
+### 根因：Debian 13 不再读取 `/etc/sysctl.conf`
+
+- Debian 13（trixie）的 `systemd` 256.4-1 删除了兼容软链 `/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf`，`procps` 也不再提供 `/etc/sysctl.conf`（升级时被改名为 `sysctl.conf.dpkg-bak`）
+- `systemd-sysctl.service` 只读 `/usr/lib/sysctl.d/`、`/etc/sysctl.d/`、`/run/sysctl.d/`，**`/etc/sysctl.conf` 完全不再被读取**
+- 旧脚本把 `net.core.default_qdisc` / `net.ipv4.tcp_congestion_control` / `net.ipv4.tcp_fastopen` 写进 `/etc/sysctl.conf`，并在安装时手动执行 `sysctl --system`，所以**装完当下 BBR 正常，一重启就掉回 cubic** —— 正是用户反馈的现象
+- 参考：Debian [#1110184](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1110184)、Debian [#1077184](https://alioth-lists.debian.net/pipermail/pkg-systemd-maintainers/2024-July/047160.html)
+
+### 修复内容
+
+- 内核参数改为写入 `/etc/sysctl.d/99-snell-network.conf`，不再覆盖 `/etc/sysctl.conf`（旧脚本会把整个文件覆盖成三行，毁掉系统/云的其它内核参数）
+- 首次运行时自动迁移：删掉自己写进 `/etc/sysctl.conf` 的三行（先备份到 `/etc/snell/sysctl.conf.bak`）、清理上一版的 `/etc/sysctl.d/99-bbr.conf`，其它内容原样保留
+- 新增 `snell-net-tune.service`（开机自愈）：在 `network-online.target` 之后重新加载 sysctl 并加载 `tcp_bbr` 模块，防止 DHCP 客户端 / cloud-init / VPS 面板在启动后期把设置改回去；同时兜底纠正时区与 `systemd-timesyncd`
+- 新增 `snell-dns.service`（开机自愈）：`/etc/resolv.conf` 被改写时重新写回静态 DNS
+- `setup_timezone()`：时区 + `set-ntp true` + 启用 `systemd-timesyncd`，并回读校验，不再只靠 `judge` 猜测
+- `setup_dns()`：先 `chattr -i` 再删除 `/etc/resolv.conf`（旧写法遇到不可变属性会失败）；纯 IPv6 服务器把 IPv6 DNS 放前面
+- 新增 `/etc/modules-load.d/snell-bbr.conf`，保证开机早期就加载 `tcp_bbr`
+- 安装流程重排：**先确认二进制下载成功，再做时区 / 内核参数 / DNS / Swap 等系统级改动**，避免下载失败还改了系统；系统级改动放进子 shell + `EXIT` trap，中途失败会兜底重申一次
+- 覆盖二进制前自动备份 `${SNELL_BIN}.bak`，服务起不来时自动回滚；周期清理脚本不再删除这个回滚文件（旧版 `rm -f snell-server.bak` 会把回滚点删掉）
+- 下载源改为三个分支顺序尝试（官方 → GitHub curl → GitHub wget），旧写法 `A && B || C` 的语义容易误判
+- `LimitNOFILE` 缺失时会补写（旧版只处理已存在的行），`swapoff` 后先关闭 swapfile 再删除
+- fstab 去 swap 改用 `awk` 写临时文件再 `mv`（`grep -v` 会破坏无结尾换行的最后一行），`disable-swap.service` 修正依赖顺序
+- 一键体检重写：直接显示 BBR / qdisc / TFO 实际值、sysctl 文件与两个自愈服务的状态、DNS 解析测试、NTP 同步状态，并明确指出“重启后是否会失效”
+- 脚本版本升到 `0.1.0`；`SHELL_VERSION` 与菜单文案同步
+
 ## 网络优化改为最简版（BBR + fq + TFO）
 
 - 用户反馈原参数“太猛”，按需求把 `/etc/sysctl.conf` 精简为三行：

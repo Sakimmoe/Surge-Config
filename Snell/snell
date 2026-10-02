@@ -3,7 +3,15 @@
 # 基于官方 snell-server v6 闭源二进制，无证书/TLS 依赖
 # 搭建方法参考: getsomecat/GetSomeCats 简单搭建Snell服务.md
 # 整体优化与搭建方式套用: Sakimmoe/AnyTLS anytls 脚本
-# 兼容 Debian/Ubuntu/CentOS，支持 amd64 / i386 / aarch64
+# 兼容 Debian 11/12/13、Ubuntu、CentOS，支持 amd64 / i386 / aarch64
+#
+# 重启后保持生效（重要）：
+#   Debian 13 (trixie) 起 systemd 只读 /usr/lib/sysctl.d、/etc/sysctl.d、/run/sysctl.d，
+#   不再读取 /etc/sysctl.conf（compat 软链 99-sysctl.conf 已被移除），
+#   因此内核参数必须写进 /etc/sysctl.d/*.conf，否则重启后 BBR 会失效。
+#   本脚本统一写入 /etc/sysctl.d/99-snell-network.conf，并由开机自愈服务
+#   snell-net-tune.service / snell-dns.service 在启动末期重新强制生效，
+#   防止 DHCP 客户端、cloud-init、VPS 面板等把设置改回去。
 
 set -euo pipefail
 
@@ -21,8 +29,26 @@ STACK_FILE="${CONFIG_DIR}/.stack"
 NET_FILE="${CONFIG_DIR}/.netstack"
 MODE_FILE="${CONFIG_DIR}/.mode"
 NET_NOFILE_LIMIT=1048576
+SNELL_BIN="/usr/local/bin/snell-server"
 SNELL_VERSION="v6.0.0rc2"
-SHELL_VERSION="0.0.9"
+SHELL_VERSION="0.1.0"
+
+# ==================== 重启后依然生效的系统配置 ====================
+# 内核参数：只写 /etc/sysctl.d/，不再碰 /etc/sysctl.conf（Debian 13 已不读该文件）
+SYSCTL_FILE="/etc/sysctl.d/99-snell-network.conf"
+LEGACY_SYSCTL_FILE="/etc/sysctl.d/99-bbr.conf"
+SYSCTL_MIGRATED_FLAG="${CONFIG_DIR}/.sysctl-migrated"
+# 开机自愈：内核参数 + 时区
+NET_TUNE_UNIT_NAME="snell-net-tune.service"
+NET_TUNE_UNIT_FILE="/etc/systemd/system/${NET_TUNE_UNIT_NAME}"
+NET_TUNE_SCRIPT="/usr/local/bin/snell-net-tune.sh"
+# 开机自愈：静态 DNS
+DNS_UNIT_NAME="snell-dns.service"
+DNS_UNIT_FILE="/etc/systemd/system/${DNS_UNIT_NAME}"
+DNS_SCRIPT="/usr/local/bin/snell-dns.sh"
+REQUIRED_NS_V4="1.1.1.1 8.8.8.8"
+REQUIRED_NS_V6="2606:4700:4700::1111 2001:4860:4860::8888"
+TZ_NAME="Asia/Shanghai"
 # 可选：在线一键安装时，从这里下载面板脚本保存到本地
 SCRIPT_URL="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Snell/snell"
 
@@ -74,8 +100,17 @@ ensure_root() {
   fi
 }
 
+# 安装过程中随时失败退出时，兜底把系统关键设置再重申一次（幂等，可重复执行）
+IN_INSTALL=false
+install_guard_exit() {
+  local rc=$?
+  [[ "$IN_INSTALL" == true ]] || return 0
+  enforce_critical_settings >/dev/null 2>&1 || true
+  return "$rc"
+}
+
 # ==================== 状态检测 ====================
-binary_exists() { [[ -x /usr/local/bin/snell-server ]]; }
+binary_exists() { [[ -x "$SNELL_BIN" ]]; }
 service_exists() { [[ -f "$SNELL_SERVICE_FILE" ]]; }
 is_installed()   { binary_exists || service_exists; }
 is_active()      { systemctl is-active "$SNELL_SERVICE_NAME" >/dev/null 2>&1; }
@@ -83,7 +118,7 @@ is_active()      { systemctl is-active "$SNELL_SERVICE_NAME" >/dev/null 2>&1; }
 get_local_version() {
   if binary_exists; then
     local raw v
-    raw=$(/usr/local/bin/snell-server -v 2>&1 || /usr/local/bin/snell-server --version 2>&1 || /usr/local/bin/snell-server -version 2>&1 || /usr/local/bin/snell-server -V 2>&1 || true)
+    raw=$("$SNELL_BIN" -v 2>&1 || "$SNELL_BIN" --version 2>&1 || "$SNELL_BIN" -version 2>&1 || "$SNELL_BIN" -V 2>&1 || true)
     v=$(printf '%s\n' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?' | head -1 || true)
     echo "${v:-unknown}"
   else
@@ -413,18 +448,24 @@ EOF
 
 # ==================== 下载 snell-server ====================
 download_snell() {
-  local DEST_BIN="${1:-/usr/local/bin/snell-server}"
-  local TMP_DL=$(mktemp -d /tmp/snell-dl.XXXXXX)
-  local URL MIRROR FILE TMP_BIN
+  local DEST_BIN="${1:-$SNELL_BIN}"
+  local TMP_DL TMP_BIN URL MIRROR FILE
+  TMP_DL=$(mktemp -d /tmp/snell-dl.XXXXXX)
   URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip"
   MIRROR="https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/vendor/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip"
+  TMP_BIN="${DEST_BIN}.tmp.$$"
 
-  if ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$URL"; then
-    print_warn "官方源 (dl.nssurge.com) 下载失败（无 IPv6 或网络问题），尝试 GitHub 备用源..."
-    if ! curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$MIRROR" && ! wget --timeout=30 -q -O "${TMP_DL}/snell-server.pkg" "$MIRROR" 2>/dev/null; then
-      rm -rf "$TMP_DL"
-      return 1
-    fi
+  # 三个源依次尝试，前面失败不会影响后面（旧写法用 && / || 串联，语义容易出错）
+  if curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$URL" 2>/dev/null; then
+    :
+  elif curl -fsSL --connect-timeout 15 -o "${TMP_DL}/snell-server.pkg" "$MIRROR" 2>/dev/null; then
+    print_warn "官方源 (dl.nssurge.com) 下载失败（无 IPv6 或网络问题），已改用 GitHub 备用源"
+  elif wget -q --timeout=30 -O "${TMP_DL}/snell-server.pkg" "$MIRROR" 2>/dev/null; then
+    print_warn "curl 下载失败，已改用 wget 从 GitHub 备用源下载"
+  else
+    print_err "官方源与 GitHub 备用源都下载失败，请检查服务器网络或 DNS"
+    rm -rf "$TMP_DL"
+    return 1
   fi
 
   if [[ ! -s "${TMP_DL}/snell-server.pkg" ]]; then
@@ -432,27 +473,28 @@ download_snell() {
     return 1
   fi
 
-  unzip -q -o "${TMP_DL}/snell-server.pkg" -d "${TMP_DL}" || {
+  if ! unzip -q -o "${TMP_DL}/snell-server.pkg" -d "${TMP_DL}" 2>/dev/null; then
+    print_err "安装包解压失败（下载到的可能不是 zip，请检查网络是否被劫持）"
     rm -rf "$TMP_DL"
     return 1
-  }
+  fi
 
   FILE=$(find "${TMP_DL}" -type f -name "snell-server" | head -1 || true)
   if [[ -z "$FILE" ]]; then
+    print_err "安装包内未找到 snell-server 可执行文件"
     rm -rf "$TMP_DL"
     return 1
   fi
 
-  TMP_BIN="${DEST_BIN}.tmp.$$"
-  if ! cp "$FILE" "$TMP_BIN"; then
-    rm -rf "$TMP_DL" "$TMP_BIN"
-    return 1
+  # 覆盖前留一份可执行备份，新版本起不来时能回滚
+  if [[ -x "$DEST_BIN" ]]; then
+    if ! cp -pf "$DEST_BIN" "${DEST_BIN}.bak" 2>/dev/null; then
+      print_warn "旧二进制备份失败，继续安装新版本"
+    fi
   fi
-  if ! chmod +x "$TMP_BIN"; then
-    rm -rf "$TMP_DL" "$TMP_BIN"
-    return 1
-  fi
-  if ! mv -f "$TMP_BIN" "$DEST_BIN"; then
+
+  if ! cp -f "$FILE" "$TMP_BIN" || ! chmod +x "$TMP_BIN" || ! mv -f "$TMP_BIN" "$DEST_BIN"; then
+    print_err "安装 snell-server 到 ${DEST_BIN} 失败"
     rm -rf "$TMP_DL" "$TMP_BIN"
     return 1
   fi
@@ -520,11 +562,12 @@ journalctl --vacuum-time=3d --vacuum-size=30M >/dev/null 2>&1 || true
 find /tmp /var/tmp -mindepth 1 -type f -mtime +7 -delete >/dev/null 2>&1 || true
 find /tmp /var/tmp -mindepth 1 -type d -mtime +7 -empty -delete >/dev/null 2>&1 || true
 
-# snell-server 更新残留
-rm -f /usr/local/bin/snell-server.bak >/dev/null 2>&1 || true
-rm -f /usr/local/bin/snell-server.tmp.* >/dev/null 2>&1 || true
-rm -f /etc/snell/*.tmp /etc/snell/*.v5bak >/dev/null 2>&1 || true
-rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip >/dev/null 2>&1 || true
+# 下载残留与更新残留
+# 注意：不要删除 snell-server.bak —— 它是二进制替换失败时的回滚文件
+find /usr/local/bin -maxdepth 1 -name 'snell-server.tmp.*' -mtime +1 -delete >/dev/null 2>&1 || true
+find /etc/snell -maxdepth 1 -name '*.tmp' -mtime +1 -delete >/dev/null 2>&1 || true
+find /etc/snell -maxdepth 1 -name '*.v5bak' -mtime +7 -delete >/dev/null 2>&1 || true
+rm -rf /tmp/snell-dl.* /tmp/snell.zip >/dev/null 2>&1 || true
 
 # 清理 systemd 失败状态
 systemctl reset-failed >/dev/null 2>&1 || true
@@ -677,10 +720,10 @@ PANEL="/usr/local/bin/snell-panel.sh"
 
 case "${1:-}" in
   --cleanup)
-    rm -f /usr/local/bin/snell-server.bak
-    rm -f /usr/local/bin/snell-server.tmp.*
-    rm -f /etc/snell/*.tmp 2>/dev/null || true
-    rm -rf /tmp/snell-dl.* /tmp/snell-* /tmp/snell.zip 2>/dev/null || true
+    # 保留 snell-server.bak（二进制回滚文件），只清临时残留
+    find /usr/local/bin -maxdepth 1 -name 'snell-server.tmp.*' -mtime +1 -delete 2>/dev/null || true
+    find /etc/snell -maxdepth 1 -name '*.tmp' -mtime +1 -delete 2>/dev/null || true
+    rm -rf /tmp/snell-dl.* /tmp/snell.zip 2>/dev/null || true
     apt-get clean >/dev/null 2>&1 || true
     ;;
   *)
@@ -723,21 +766,187 @@ ensure_service_loglevel() {
 }
 
 # ==================== 核心功能：安装 ====================
-apply_network_optimization() {
-  # 删除旧的 sysctl.d 配置，统一写入 /etc/sysctl.conf
-  rm -f /etc/sysctl.d/99-bbr.conf
+# 把内核参数写进 /etc/sysctl.d/99-snell-network.conf
+#
+# 为什么不用 /etc/sysctl.conf：
+# Debian 13 (trixie) 起，systemd 只读 /usr/lib/sysctl.d、/etc/sysctl.d、/run/sysctl.d，
+# procps 也不再提供 /etc/sysctl.conf，原来的兼容软链 /etc/sysctl.d/99-sysctl.conf 已被删除。
+# 所以写 /etc/sysctl.conf 在 Debian 13 上安装当时有效（脚本手动执行了 sysctl --system），
+# 一重启就失效 —— BBR 掉回 cubic 就是这个原因。详细见 Debian #1110184 / #1077184。
+write_sysctl_dropin() {
+  mkdir -p /etc/sysctl.d
 
-  cat > /etc/sysctl.conf <<'EOF'
+  # 迁移旧版脚本写进 /etc/sysctl.conf 的参数，同时清理上一版留下的 99-bbr.conf
+  # 只删脚本自己管的三行，其余内容原样保留
+  if [[ ! -f "$SYSCTL_MIGRATED_FLAG" ]]; then
+    if [[ -f /etc/sysctl.conf ]]; then
+      if grep -qE '^[[:space:]]*(net\.core\.default_qdisc|net\.ipv4\.tcp_congestion_control|net\.ipv4\.tcp_fastopen)[[:space:]]*=' /etc/sysctl.conf 2>/dev/null; then
+        cp -a /etc/sysctl.conf "${CONFIG_DIR}/sysctl.conf.bak" 2>/dev/null || true
+        sed -i -E '/^[[:space:]]*(net\.core\.default_qdisc|net\.ipv4\.tcp_congestion_control|net\.ipv4\.tcp_fastopen)[[:space:]]*=/d' /etc/sysctl.conf 2>/dev/null || true
+      fi
+    fi
+    rm -f "$LEGACY_SYSCTL_FILE" 2>/dev/null || true
+    mkdir -p "$CONFIG_DIR" 2>/dev/null || true
+    : > "$SYSCTL_MIGRATED_FLAG" 2>/dev/null || true
+  fi
+
+  cat > "$SYSCTL_FILE" <<'EOF'
+# 由 Snell 一键脚本写入：BBR + fq + TCP Fast Open
+# 只写 /etc/sysctl.d/ 下（systemd-sysctl 会读取），不要改回 /etc/sysctl.conf
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_fastopen = 3
 EOF
+  chmod 644 "$SYSCTL_FILE" 2>/dev/null || true
 
-  sysctl -p >/dev/null 2>&1 || print_warn "sysctl -p 有参数未能生效，请手动执行 sysctl -p 查看错误"
-  sysctl --system >/dev/null 2>&1 || print_warn "sysctl --system 有参数未能生效，请手动执行 sysctl --system 查看错误"
+  # 尽早加载 bbr 模块，避免开机时模块还没加载导致参数写入失败
+  if ! lsmod 2>/dev/null | grep -q '^tcp_bbr'; then
+    modprobe tcp_bbr >/dev/null 2>&1 || true
+  fi
+  if [[ -d /etc/modules-load.d ]]; then
+    if ! grep -qs '^tcp_bbr$' /etc/modules-load.d/snell-bbr.conf 2>/dev/null; then
+      printf '%s\n' 'tcp_bbr' > /etc/modules-load.d/snell-bbr.conf 2>/dev/null || true
+    fi
+  fi
+}
 
-  if [[ -f "$SNELL_SERVICE_FILE" ]] && grep -q '^LimitNOFILE=' "$SNELL_SERVICE_FILE"; then
-    sed -i "s/^LimitNOFILE=.*/LimitNOFILE=${NET_NOFILE_LIMIT}/" "$SNELL_SERVICE_FILE"
+# 真实应用并回读校验，不靠“命令没报错”来判断成功
+apply_sysctl_now() {
+  sysctl --system >/dev/null 2>&1 || true
+  sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1 || true
+
+  local cc qdisc tfo
+  cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
+  qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "")
+  tfo=$(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo "")
+
+  if [[ "$cc" == "bbr" ]]; then
+    print_ok "BBR 已生效 (default_qdisc=${qdisc:-未知}, tcp_fastopen=${tfo:-未知})"
+  else
+    print_warn "BBR 未生效（当前拥塞控制算法: ${cc:-未知}）"
+    if [[ "$cc" == "cubic" ]] && ! modinfo tcp_bbr >/dev/null 2>&1; then
+      print_warn "当前内核没有 tcp_bbr 模块，多数 VPS 的 Debian 内核都自带；若确实没有请更换内核"
+    fi
+    print_warn "排查: sysctl -p $SYSCTL_FILE"
+  fi
+}
+
+# 开机自愈服务：内核参数 + 时区
+# 只靠 /etc/sysctl.d 还不够稳：部分 VPS 的 DHCP 客户端、cloud-init 或面板脚本
+# 会在启动后期把 BBR / qdisc / DNS 改回去，所以在启动末期再强制写一次
+setup_boot_persist() {
+  cat > "$NET_TUNE_SCRIPT" <<'EOF'
+#!/bin/bash
+# 由 Snell 一键脚本安装：开机末期重新强制生效内核网络参数与时区
+SYSCTL_FILE="/etc/sysctl.d/99-snell-network.conf"
+
+modprobe tcp_bbr >/dev/null 2>&1 || true
+sysctl --system >/dev/null 2>&1 || true
+[ -f "$SYSCTL_FILE" ] && sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1
+
+# 时区兜底：/etc/localtime 被改掉时重新指向上海
+if [ -f /usr/share/zoneinfo/Asia/Shanghai ]; then
+  if [ "$(readlink -f /etc/localtime 2>/dev/null)" != "/usr/share/zoneinfo/Asia/Shanghai" ]; then
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+  fi
+fi
+
+# 时间同步服务被禁用时重新启用
+if [ -f /etc/systemd/system/systemd-timesyncd.service ] || [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
+  systemctl is-enabled systemd-timesyncd >/dev/null 2>&1 || systemctl enable systemd-timesyncd >/dev/null 2>&1
+  systemctl is-active systemd-timesyncd >/dev/null 2>&1 || systemctl start systemd-timesyncd >/dev/null 2>&1
+fi
+
+exit 0
+EOF
+  chmod +x "$NET_TUNE_SCRIPT" 2>/dev/null || true
+
+  cat > "$NET_TUNE_UNIT_FILE" <<EOF
+[Unit]
+Description=Snell network tuning (re-apply sysctl/BBR/timezone after boot)
+Documentation=file:${SYSCTL_FILE}
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=${SYSCTL_FILE}
+
+[Service]
+Type=oneshot
+ExecStart=${NET_TUNE_SCRIPT}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 644 "$NET_TUNE_UNIT_FILE" 2>/dev/null || true
+}
+
+# 静态 /etc/resolv.conf 往往会被 DHCP 客户端 / cloud-init / VPS 面板在重启后改回去，
+# 所以让 systemd 在启动末期检查一次：缺少我们的 nameserver 就重写
+setup_dns_persist() {
+  cat > "$DNS_SCRIPT" <<'EOF'
+#!/bin/bash
+# 由 Snell 一键脚本安装：保证重启后 /etc/resolv.conf 仍是静态 DNS
+NS4="1.1.1.1 8.8.8.8"
+NS6="2606:4700:4700::1111 2001:4860:4860::8888"
+
+need=0
+for ns in $NS4; do
+  grep -qE "^[[:space:]]*nameserver[[:space:]]+$ns([[:space:]]|$)" /etc/resolv.conf 2>/dev/null || need=1
+done
+if [ "$need" -eq 0 ] && [ -s /etc/resolv.conf ]; then
+  exit 0
+fi
+
+chattr -i /etc/resolv.conf >/dev/null 2>&1 || true
+rm -f /etc/resolv.conf
+{
+  for ns in $NS4; do printf 'nameserver %s\n' "$ns"; done
+  for ns in $NS6; do printf 'nameserver %s\n' "$ns"; done
+} > /etc/resolv.conf
+chmod 644 /etc/resolv.conf 2>/dev/null || true
+exit 0
+EOF
+  chmod +x "$DNS_SCRIPT" 2>/dev/null || true
+
+  cat > "$DNS_UNIT_FILE" <<EOF
+[Unit]
+Description=Snell static DNS (keep /etc/resolv.conf after reboot)
+After=network-online.target snell-net-tune.service
+Wants=network-online.target snell-net-tune.service
+
+[Service]
+Type=oneshot
+ExecStart=${DNS_SCRIPT}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 644 "$DNS_UNIT_FILE" 2>/dev/null || true
+}
+
+enable_boot_persist() {
+  [[ -d /run/systemd/system ]] || return 0
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable "$NET_TUNE_UNIT_NAME" >/dev/null 2>&1 || true
+  systemctl enable "$DNS_UNIT_NAME" >/dev/null 2>&1 || true
+}
+
+# ==================== 核心功能：安装 ====================
+apply_network_optimization() {
+  mkdir -p "$CONFIG_DIR"
+  write_sysctl_dropin
+  setup_boot_persist
+  enable_boot_persist
+  apply_sysctl_now
+
+  # 老安装的服务可能没有 LimitNOFILE，补上（原来只会改已存在的行）
+  if [[ -f "$SNELL_SERVICE_FILE" ]]; then
+    if grep -q '^LimitNOFILE=' "$SNELL_SERVICE_FILE"; then
+      sed -i "s/^LimitNOFILE=.*/LimitNOFILE=${NET_NOFILE_LIMIT}/" "$SNELL_SERVICE_FILE"
+    else
+      sed -i "/^\[Service\]/a LimitNOFILE=${NET_NOFILE_LIMIT}" "$SNELL_SERVICE_FILE"
+    fi
     systemctl daemon-reload >/dev/null 2>&1 || true
     if is_active; then
       systemctl restart snell >/dev/null 2>&1 || true
@@ -749,7 +958,77 @@ EOF
       fi
     fi
   fi
-  print_ok "网络优化已应用"
+
+  print_ok "网络优化已应用（内核参数写入 ${SYSCTL_FILE}，开机自动重申）"
+}
+
+# 时区 + 时间同步（重启后同样保持）
+setup_timezone() {
+  print_info "设置时区为 ${TZ_NAME} 并启用时间同步..."
+  if command -v timedatectl >/dev/null 2>&1; then
+    if ! timedatectl set-timezone "$TZ_NAME" 2>/dev/null; then
+      ln -sf "/usr/share/zoneinfo/${TZ_NAME}" /etc/localtime 2>/dev/null || true
+    fi
+  else
+    ln -sf "/usr/share/zoneinfo/${TZ_NAME}" /etc/localtime 2>/dev/null || true
+  fi
+
+  if command -v timedatectl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+  fi
+  systemctl enable systemd-timesyncd >/dev/null 2>&1 || true
+  systemctl start systemd-timesyncd >/dev/null 2>&1 || true
+
+  local now_tz
+  now_tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo "")
+  if [[ -n "$now_tz" && "$now_tz" != "$TZ_NAME" ]]; then
+    print_warn "时区未确认生效（当前: ${now_tz}），重启后由 ${NET_TUNE_UNIT_NAME} 再纠正"
+  else
+    print_ok "时区与时间同步 完成"
+  fi
+}
+
+# 静态 DNS + 阻止 systemd-resolved / resolvconf 重新接管
+setup_dns() {
+  print_info "配置静态 DNS（1.1.1.1 / 8.8.8.8）..."
+
+  systemctl disable systemd-resolved --now >/dev/null 2>&1 || true
+  systemctl mask systemd-resolved >/dev/null 2>&1 || true
+  systemctl disable resolvconf --now >/dev/null 2>&1 || true
+  systemctl mask resolvconf >/dev/null 2>&1 || true
+
+  # 可能是软链、也可能被加了不可变属性，先都清掉
+  chattr -i /etc/resolv.conf >/dev/null 2>&1 || true
+  rm -f /etc/resolv.conf
+
+  if [[ "$(get_egress_stack)" == "v6only" ]]; then
+    {
+      for ns in $REQUIRED_NS_V6; do echo "nameserver ${ns}"; done
+      for ns in $REQUIRED_NS_V4; do echo "nameserver ${ns}"; done
+    } > /etc/resolv.conf
+  else
+    {
+      for ns in $REQUIRED_NS_V4; do echo "nameserver ${ns}"; done
+      for ns in $REQUIRED_NS_V6; do echo "nameserver ${ns}"; done
+    } > /etc/resolv.conf
+  fi
+  chmod 644 /etc/resolv.conf 2>/dev/null || true
+
+  setup_dns_persist
+  enable_boot_persist
+  print_ok "DNS 已写入 /etc/resolv.conf，并已安装开机自愈服务（${DNS_UNIT_NAME}）"
+}
+
+# 安装过程中的任何失败退出，都把系统设置再兜一次，避免留下半成品
+enforce_critical_settings() {
+  [[ -f "$SYSCTL_FILE" ]] || return 0
+  sysctl --system >/dev/null 2>&1 || true
+  sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1 || true
+  if [[ -x "$DNS_SCRIPT" ]]; then
+    bash "$DNS_SCRIPT" >/dev/null 2>&1 || true
+  fi
+  enable_boot_persist
+  return 0
 }
 
 # ==================== Swap 自动调整 ====================
@@ -818,19 +1097,23 @@ setup_swap() {
       swapoff -a >/dev/null 2>&1 || true
     fi
     # 移除 fstab 中所有 swap 条目（含系统自带），防止重启后恢复
-    if [[ -s "$FSTAB" ]]; then
-      awk 'NF>=3 && $3=="swap" { next } { print }' "$FSTAB" > "${FSTAB}.tmp" && mv -f "${FSTAB}.tmp" "$FSTAB"
+    # 注意：不能用 grep -v，会弄坏无结尾换行的最后一行；用 awk 重写更稳
+    if [[ -f "$FSTAB" ]]; then
+      awk 'NF>=3 && $3=="swap" { next } { print }' "$FSTAB" > "${FSTAB}.snelltmp" && mv -f "${FSTAB}.snelltmp" "$FSTAB"
+      chmod 644 "$FSTAB" 2>/dev/null || true
     fi
     # 删除脚本自己创建的 swapfile
     if [[ -f "$SWAP_FILE" ]]; then
+      swapoff "$SWAP_FILE" >/dev/null 2>&1 || true
       rm -f "$SWAP_FILE"
     fi
     # 安装开机强制关闭 swap 的服务：防止 fstab 之外的机制在重启后重新启用 swap
-    cat > "$SWAP_OFF_SERVICE" <<EOF
+    cat > "$SWAP_OFF_SERVICE" <<'EOF'
 [Unit]
 Description=Disable Swap (managed by one-click proxy script)
 DefaultDependencies=no
-After=swap.target local-fs.target
+After=local-fs.target swap.target
+Before=multi-user.target
 
 [Service]
 Type=oneshot
@@ -861,8 +1144,8 @@ install_snell() {
     print_info "检测到已有安装，先停止服务..."
     systemctl stop snell >/dev/null 2>&1 || true
     systemctl disable snell >/dev/null 2>&1 || true
-    rm -f /usr/local/bin/snell-server.bak
-    rm -f /usr/local/bin/snell-server.tmp.*
+    rm -f "${SNELL_BIN}.bak"
+    rm -f "${SNELL_BIN}.tmp."*
     rm -f "${CONFIG_DIR}"/*.tmp 2>/dev/null || true
     sleep 1
     print_ok "旧服务已停止"
@@ -872,13 +1155,12 @@ install_snell() {
   install_deps
   print_ok "必要依赖检查通过"
 
-  # 设置时区为上海
-  print_info "设置时区为 Asia/Shanghai..."
-  timedatectl set-timezone Asia/Shanghai 2>/dev/null || ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-  judge "时区设置"
+  local TZ_NOW
+  TZ_NOW=$(timedatectl show -p Timezone --value 2>/dev/null || echo "")
+  [[ "$TZ_NOW" != "$TZ_NAME" ]] && print_info "当前时区: ${TZ_NOW:-未知}"
 
-  # 网络优化 (开启 IPv4 优先、BBR 及 TCP Fast Open)
-  print_info "优化网络配置..."
+  # 网络探测（决定监听栈 / DNS / 出站策略）
+  print_info "检测服务器网络与出口 IP..."
   check_system_ip
   [[ "$IP_STACK" == "unknown" ]] && { print_err "无法获取服务器 IP，请检查网络"; exit 1; }
   mkdir -p "$CONFIG_DIR"
@@ -886,26 +1168,6 @@ install_snell() {
   if [[ "$IP_STACK" == "dual" || "$IP_STACK" == "v4only" ]]; then
     grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
   fi
-
-  # 先停掉所有会接管 resolv.conf 的服务
-  systemctl disable systemd-resolved --now >/dev/null 2>&1 || true
-  systemctl mask systemd-resolved >/dev/null 2>&1 || true
-  systemctl disable resolvconf --now >/dev/null 2>&1 || true
-  systemctl mask resolvconf >/dev/null 2>&1 || true
-
-  # 直接删掉旧文件（可能是软链接），防止 resolvconf 再次覆盖
-  rm -f /etc/resolv.conf
-
-  # 重新写入
-  cat > /etc/resolv.conf <<'EOF'
-nameserver 1.1.1.1
-nameserver 8.8.8.8
-nameserver 2606:4700:4700::1111
-nameserver 2001:4860:4860::8888
-EOF
-
-  apply_network_optimization
-  setup_swap
 
   # 架构
   ARCH=$(get_arch)
@@ -936,39 +1198,62 @@ EOF
     PORT=${input_port:-26216}
   done
 
-  local DEF_PASS=$(gen_password)
+  local DEF_PASS
+  DEF_PASS=$(gen_password)
   local PASS
   PASS=$(read_psk_interactive "" "$DEF_PASS")
 
   local MODE
   MODE=$(read_mode_interactive)
 
-  # 下载 snell-server
+  # 下载 snell-server（先确保二进制可用，再做任何系统级改动）
   print_info "获取 snell-server ${SNELL_VERSION}..."
   local VER
-  VER=$(download_snell /usr/local/bin/snell-server) || VER=""
+  VER=$(download_snell "$SNELL_BIN") || VER=""
   if [[ -z "$VER" ]]; then
-    print_err "下载 snell-server 失败"
-    systemctl restart snell >/dev/null 2>&1 || true
+    print_err "下载 snell-server 失败，未改动任何系统设置，可直接重试"
+    # 重装场景：旧二进制还在，把之前停掉的服务拉起来，避免节点直接失联
+    if [[ -x "$SNELL_BIN" && -f "$SNELL_SERVICE_FILE" ]]; then
+      systemctl start snell >/dev/null 2>&1 || true
+      print_info "已尝试恢复原有 snell 服务"
+    fi
     exit 1
   fi
   print_ok "snell-server 已安装: ${VER}"
 
-  # 根据栈类型生成配置
-  mkdir -p "$CONFIG_DIR"
-  echo "$IP_STACK" > "$STACK_FILE"
-  echo "$MODE" > "$MODE_FILE"
-  write_snell_conf "$PORT" "$PASS" "$IP_STACK" "$MODE"
+  # 系统级改动统一收敛到这里：时区 / 内核参数 / DNS / Swap
+  # 用子 shell 执行，任何一步失败都会触发 EXIT trap 做一次兜底重申
+  IN_INSTALL=true
+  trap 'install_guard_exit' EXIT
 
-  # systemd（搭建方式参考 GetSomeCats 文档：nobody 运行 + CAP_NET_BIND_SERVICE）
-  local SVC_USER="nobody" SVC_GROUP="nogroup"
-  if ! getent group nogroup >/dev/null 2>&1; then
-    SVC_GROUP="nobody"
-  fi
-  chown "root:${SVC_GROUP}" "$CONF_FILE" >/dev/null 2>&1 || chmod 644 "$CONF_FILE"
-  chmod 640 "$CONF_FILE" >/dev/null 2>&1 || true
+  (
+    # 时区 + 时间同步
+    setup_timezone
 
-  cat > "$SNELL_SERVICE_FILE" <<EOF
+    # 内核网络优化（BBR / fq / TFO）+ 开机自愈服务
+    # 同时装上静态 DNS 的开机自愈服务（顺序不能反，DNS 不是 network-online 的前置）
+    print_info "优化网络配置..."
+    apply_network_optimization
+    setup_dns
+
+    # Swap 自动调整
+    setup_swap
+
+    # 根据栈类型生成配置
+    mkdir -p "$CONFIG_DIR"
+    echo "$IP_STACK" > "$STACK_FILE"
+    echo "$MODE" > "$MODE_FILE"
+    write_snell_conf "$PORT" "$PASS" "$IP_STACK" "$MODE"
+
+    # systemd（搭建方式参考 GetSomeCats 文档：nobody 运行 + CAP_NET_BIND_SERVICE）
+    local SVC_USER="nobody" SVC_GROUP="nogroup"
+    if ! getent group nogroup >/dev/null 2>&1; then
+      SVC_GROUP="nobody"
+    fi
+    chown "root:${SVC_GROUP}" "$CONF_FILE" >/dev/null 2>&1 || chmod 644 "$CONF_FILE"
+    chmod 640 "$CONF_FILE" >/dev/null 2>&1 || true
+
+    cat > "$SNELL_SERVICE_FILE" <<EOF
 [Unit]
 Description=Snell Server (snell-server)
 After=network.target
@@ -978,7 +1263,7 @@ Type=simple
 User=${SVC_USER}
 Group=${SVC_GROUP}
 LimitNOFILE=${NET_NOFILE_LIMIT:-1048576}
-ExecStart=/usr/local/bin/snell-server -c ${CONF_FILE} --loglevel warning
+ExecStart=${SNELL_BIN} -c ${CONF_FILE} --loglevel warning
 Restart=on-failure
 RestartSec=3s
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -990,39 +1275,63 @@ SyslogIdentifier=snell-server
 WantedBy=multi-user.target
 EOF
 
-  systemctl daemon-reload
-  systemctl enable snell >/dev/null 2>&1 || true
-  systemctl restart snell >/dev/null 2>&1 || true
-  sleep 2
+    systemctl daemon-reload
+    systemctl enable snell >/dev/null 2>&1 || true
+    systemctl restart snell >/dev/null 2>&1 || true
+    sleep 2
 
-  for _ in 1 2 3; do
-    systemctl is-active --quiet snell && break
-    sleep 1
-  done
+    for _ in 1 2 3; do
+      systemctl is-active --quiet snell && break
+      sleep 1
+    done
 
-  if ! systemctl is-active --quiet snell; then
-    print_err "Snell 启动失败"
-    journalctl -u snell -n 20 --no-pager
+    if ! systemctl is-active --quiet snell; then
+      print_err "Snell 启动失败"
+      journalctl -u snell -n 20 --no-pager
+      if [[ -x "${SNELL_BIN}.bak" ]]; then
+        print_warn "检测到旧版本备份，正在回滚二进制..."
+        mv -f "${SNELL_BIN}.bak" "$SNELL_BIN"
+        systemctl restart snell >/dev/null 2>&1 || true
+        sleep 2
+        if systemctl is-active --quiet snell; then
+          print_ok "已回滚到旧版本，服务恢复正常；请检查新版本是否与当前系统兼容"
+        else
+          print_err "回滚后仍未启动，请手动排查: journalctl -u snell -n 50"
+        fi
+      fi
+      exit 1
+    fi
+    judge "服务启动"
+
+    # 防火墙
+    setup_ufw "$PORT"
+
+    # 定时任务
+    setup_cron
+
+    # 快捷命令
+    create_shortcut
+
+    # 导出信息
+    export_snell_info "$PORT" "$PASS" "$MODE"
+  ) || {
+    trap - EXIT
+    IN_INSTALL=false
+    print_err "安装过程中断，请根据上面提示处理后重试"
     exit 1
-  fi
-  judge "服务启动"
+  }
 
-  # 防火墙
-  setup_ufw "$PORT"
-
-  # 定时任务
-  setup_cron
-
-  # 快捷命令
-  create_shortcut
-
-  # 导出信息
-  export_snell_info "$PORT" "$PASS" "$MODE"
+  # 系统改动已经完成，撤掉兜底 trap
+  trap - EXIT
+  IN_INSTALL=false
+  enable_boot_persist
 
   # 完成
   echo ""
   print_ok "Snell 部署完成"
   echo -e " ${BGreen}$(cat "$LIST_FILE")${Font}"
+  echo ""
+  print_info "重启后自动保持：BBR($(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '?')) / DNS / 时区($(timedatectl show -p Timezone --value 2>/dev/null || echo '?'))"
   echo ""
 
   pause
@@ -1260,6 +1569,21 @@ status_service() {
   pause
 }
 
+# ==================== 重新应用系统设置 ====================
+apply_system_defaults() {
+  hr
+  print_info "重新应用系统设置（时区 / 内核优化 / DNS / Swap）"
+  hr
+  setup_timezone
+  apply_network_optimization
+  setup_dns
+  setup_swap
+  setup_cron
+  create_shortcut
+  hr
+  print_ok "系统设置已重新应用，重启后依然生效"
+}
+
 # ==================== 一键体检 ====================
 health_check() {
   clear
@@ -1267,26 +1591,45 @@ health_check() {
   print_info "Snell 一键体检"
   hr
   echo "=== Snell 服务 ==="
-  systemctl is-enabled snell --no-pager 2>/dev/null || true
-  systemctl is-active snell --no-pager 2>/dev/null || true
+  echo "开机自启: $(systemctl is-enabled snell 2>/dev/null || echo '未启用')"
+  echo "运行状态: $(systemctl is-active snell 2>/dev/null || echo '未运行')"
+  systemctl status snell --no-pager -n 3 2>/dev/null | sed -n '1,4p' || true
   echo "=== 监听端口 ==="
-  ss -tlnp | grep snell || echo "未发现 snell 监听端口"
-  echo "=== BBR ==="
-  sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc 2>/dev/null || true
-  echo "=== TCP/网络优化 ==="
-  sysctl net.ipv4.tcp_fastopen net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.rmem_max net.core.wmem_max vm.swappiness 2>/dev/null || true
+  ss -tlnp 2>/dev/null | grep -i snell || echo "未发现 snell 监听端口"
+  echo "=== BBR / 网络优化（重启后是否还在）==="
+  printf '拥塞控制算法: %s\n' "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '读取失败')"
+  printf '队列算法    : %s\n' "$(sysctl -n net.core.default_qdisc 2>/dev/null || echo '读取失败')"
+  printf 'TCP FastOpen: %s\n' "$(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo '读取失败')"
+  echo "配置文件: ${SYSCTL_FILE}"
+  if [[ -f "$SYSCTL_FILE" ]]; then
+    echo "  [存在] 内容: $(tr '\n' ';' < "$SYSCTL_FILE" 2>/dev/null || echo '读取失败')"
+  else
+    echo "  [缺失] 重启后会失效，请执行菜单 9 重新应用"
+  fi
+  echo "开机自愈服务: $(systemctl is-enabled "$NET_TUNE_UNIT_NAME" 2>/dev/null || echo '未启用') / $(systemctl is-active "$NET_TUNE_UNIT_NAME" 2>/dev/null || echo '未运行')"
+  if [[ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '')" != "bbr" ]]; then
+    echo "  [注意] BBR 未生效，执行菜单 9 或 sysctl -p ${SYSCTL_FILE} 排查"
+  fi
+  echo "旧文件 /etc/sysctl.conf（Debian 13 已不读取，仅作参考）:"
+  grep -nE 'tcp_congestion_control|default_qdisc|tcp_fastopen' /etc/sysctl.conf 2>/dev/null || echo "  （无相关参数，正常）"
   echo "=== Swap ==="
   free -h
-  systemctl is-enabled disable-swap --no-pager 2>/dev/null || true
+  echo "disable-swap 服务: $(systemctl is-enabled disable-swap 2>/dev/null || echo '未安装/未启用')"
   echo "=== DNS ==="
   cat /etc/resolv.conf
-  systemctl is-enabled systemd-resolved --no-pager 2>/dev/null || true
+  echo "systemd-resolved: $(systemctl is-enabled systemd-resolved 2>/dev/null || echo '未启用')"
+  echo "DNS 自愈服务: $(systemctl is-enabled "$DNS_UNIT_NAME" 2>/dev/null || echo '未启用')"
+  printf '解析测试: %s\n' "$(getent hosts raw.githubusercontent.com 2>/dev/null | head -1 || echo '解析失败，请检查 /etc/resolv.conf 与 DNS 连通性')"
   echo "=== UFW ==="
-  ufw status | head -10
-  echo "=== 时区 ==="
-  timedatectl show -p Timezone --value 2>/dev/null || true
+  ufw status 2>/dev/null | head -10 || echo "UFW 未安装或不可用"
+  echo "=== 时区 / 时间 ==="
+  timedatectl 2>/dev/null | sed -n '1,6p' || date
+  echo "NTP 同步: $(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo '未知')"
+  echo "=== 定时清理 ==="
+  echo "cron: $(systemctl is-enabled cron 2>/dev/null || echo '未启用')"
+  echo "任务文件: $( [[ -f "$CRON_CLEAN" ]] && echo '存在' || echo '缺失（执行菜单 9 可重建）' )"
   echo "=== 快捷命令 ==="
-  ls -l /usr/local/bin/s 2>/dev/null || true
+  ls -l /usr/local/bin/s /usr/local/bin/snell 2>/dev/null || true
   hr
   pause
 }
@@ -1312,7 +1655,7 @@ uninstall_snell() {
   systemctl daemon-reload >/dev/null 2>&1 || true
 
   print_info "清理文件..."
-  rm -f /usr/local/bin/snell-server /usr/local/bin/snell-server.bak
+  rm -f "$SNELL_BIN" "${SNELL_BIN}.bak"
   rm -f /usr/local/bin/snell
   rm -f /usr/local/bin/a
   rm -f /usr/local/bin/s
@@ -1321,6 +1664,15 @@ uninstall_snell() {
   rm -f "$CRON_CLEAN"
   rm -f /usr/local/bin/snell-cleanup.sh
   rm -rf "$CONFIG_DIR"
+
+  # 系统级改动：默认保留（避免把别的程序依赖的 DNS / Swap 设置弄坏），提示用户可手动还原
+  print_info "系统设置（BBR / 静态 DNS / 时区 / Swap）默认保留，且重启后仍生效。"
+  print_info "如需一并还原："
+  print_info "  systemctl disable --now ${NET_TUNE_UNIT_NAME} ${DNS_UNIT_NAME}"
+  print_info "  rm -f ${NET_TUNE_UNIT_FILE} ${DNS_UNIT_FILE} ${NET_TUNE_SCRIPT} ${DNS_SCRIPT}"
+  print_info "  rm -f ${SYSCTL_FILE} /etc/modules-load.d/snell-bbr.conf"
+  print_info "  systemctl unmask systemd-resolved && systemctl enable --now systemd-resolved"
+  print_info "  systemctl unmask resolvconf 2>/dev/null; systemctl disable --now disable-swap 2>/dev/null"
 
   print_ok "Snell 已彻底卸载"
   pause
@@ -1361,7 +1713,7 @@ main() {
       6) restart_service ;;
       7) status_service ;;
       8) health_check ;;
-      9) apply_network_optimization; setup_swap; setup_cron; create_shortcut ;;
+      9) apply_system_defaults ;;
       10) uninstall_snell ;;
       0) exit 0 ;;
       *) print_warn "无效选项"; sleep 1 ;;

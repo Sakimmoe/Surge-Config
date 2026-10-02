@@ -2,7 +2,7 @@
 
 适用场景：官方发布新版本（例如 v6.0.0rc3）后，手动改仓库代码，再在服务器上重新安装。脚本已移除在线更新功能。
 
-行号以仓库 main 分支当前版本为准；改动后行号会变化，按标记文字搜索即可。
+行号以仓库 main 分支当前版本为准（`SHELL_VERSION="0.1.0"`）；改动后行号会变化，按标记文字搜索即可。
 
 ## 需要改的文件
 
@@ -16,10 +16,10 @@
 
 文件：`Snell/snell`
 
-- 第 24 行：`SNELL_VERSION="v6.0.0rc2"`
+- 第 33 行：`SNELL_VERSION="v6.0.0rc2"`
 - 把 `v6.0.0rc2` 改成新版号，例如 `v6.0.0rc3`
 
-这一行决定下载哪个版本：脚本第 321 行按 `${SNELL_VERSION}` 拼官方下载地址，第 322 行按它拼仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
+这一行决定下载哪个版本：`download_snell()` 按 `${SNELL_VERSION}` 拼官方下载地址与仓库 `vendor/` 备用地址，所以版本号必须和安装包文件名完全一致。
 
 ## 二、替换 vendor/ 安装包
 
@@ -40,22 +40,24 @@
 
 1. 配置文件模板
    - 文件：`Snell/snell`
-   - 第 296 行开始：`write_snell_conf()`，生成的配置内容是 `listen / psk / mode / dns / dns-ip-preference`
+   - 函数 `write_snell_conf()`（搜索函数名）：生成的配置内容是 `listen / psk / mode / dns / dns-ip-preference`
    - 官方改了配置键就在这里增删对应行
 2. 网络模式相关函数
-   - 第 259 行：`make_listen()`，三种监听模式（仅 v4 / 双栈 / 仅 v6 入站）
-   - 第 269 行：`get_egress_stack()`，读取服务器真实网络（`.netstack`）
-   - 第 278 行：`make_dns()`，出站 DNS 按真实网络：有 IPv4 用 IPv4 DNS，纯 IPv6 用 IPv6 DNS
-   - 第 286 行：`make_dns_pref()`，出站按真实网络：有 IPv4 用 `ipv4-only`，纯 IPv6 用 `ipv6-only`
+   - `make_listen()`：三种监听模式（仅 v4 / 双栈 / 仅 v6 入站）
+   - `get_egress_stack()`：读取服务器真实网络（`.netstack`）
+   - `make_dns()`：出站 DNS 按真实网络：有 IPv4 用 IPv4 DNS，纯 IPv6 用 IPv6 DNS
+   - `make_dns_pref()`：出站按真实网络：有 IPv4 用 `ipv4-only`，纯 IPv6 用 `ipv6-only`
 3. 客户端节点行
-   - 第 443 行开始：`export_snell_info()`
-   - 第 449-450 行：`EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
-   - 第 454、458、461 行：IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
+   - 函数 `export_snell_info()`（搜索函数名）
+   - `EXTRA` 变量里的 `version=6`，协议版本变了就改成新版
+   - IPv4 / IPv6 / 兜底三行节点信息的生成，格式变了改这里
 4. 服务启动参数
-   - 第 902 行：`ExecStart=/usr/local/bin/snell-server -c ... --loglevel warning`
+   - systemd 单元里的 `ExecStart=${SNELL_BIN} -c ... --loglevel warning`（在 `install_snell()` 内）
    - 新版命令行参数有变化就改这一行
 5. 安装依赖（一般不用动）
-   - 第 782 行：Debian/Ubuntu 的依赖安装列表；新版本有新依赖才加
+   - `install_deps()` 里 Debian/Ubuntu 的 `pkgs="curl unzip ca-certificates iproute2 cron"`；新版本有新依赖才加
+
+> 注意：不要改动 `write_sysctl_dropin()` / `setup_boot_persist()` / `setup_dns_persist()` 这套“写入 `/etc/sysctl.d/` + 开机自愈服务”的持久化结构。Debian 13 起 `/etc/sysctl.conf` 不再被 systemd 读取，写回那里会导致重启后 BBR 失效（详见 `REVIEW.md` 的 v0.1.0 一节）。
 
 ## 五、推送仓库
 

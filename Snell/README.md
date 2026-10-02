@@ -15,10 +15,27 @@ bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Surge-Config/main/Sne
 5. 切换监听模式（IPv4 / 双栈 / IPv6）与协议模式（default / unshaped / unsafe-raw）
 6. 重启服务
 7. 查看运行状态
-8. 一键体检（服务 / BBR / 网络优化 / Swap / DNS / UFW / 时区）
-9. 重新应用网络优化 / 调整 Swap
+8. 一键体检（服务 / BBR / 网络优化 / Swap / DNS / UFW / 时区 / 开机自愈服务）
+9. 重新应用系统设置（时区 / 内核优化 / DNS / Swap / 定时清理）
 10. 卸载
 0. 退出
+
+## 重启后依然生效（重要）
+
+脚本对系统做的改动都会持久化，并且有开机自愈服务兜底：
+
+| 项目 | 落地位置 | 开机兜底 |
+| --- | --- | --- |
+| BBR / fq / TCP Fast Open | `/etc/sysctl.d/99-snell-network.conf` + `/etc/modules-load.d/snell-bbr.conf` | `snell-net-tune.service` |
+| 静态 DNS（1.1.1.1 / 8.8.8.8） | `/etc/resolv.conf`（并 mask `systemd-resolved`） | `snell-dns.service` |
+| 时区 Asia/Shanghai + NTP | `/etc/localtime` + `systemd-timesyncd` | `snell-net-tune.service` |
+| Swap 关闭 / 512M swapfile | `/etc/fstab` + `disable-swap.service` | `disable-swap.service` |
+| Snell 服务自启 | `snell.service` | systemd |
+
+**为什么必须写 `/etc/sysctl.d/` 而不是 `/etc/sysctl.conf`：**
+Debian 13（trixie）起，`systemd` 删除了兼容软链 `/etc/sysctl.d/99-sysctl.conf`，`procps` 也不再提供 `/etc/sysctl.conf`，`systemd-sysctl.service` 只读 `/usr/lib/sysctl.d/`、`/etc/sysctl.d/`、`/run/sysctl.d/`。写 `/etc/sysctl.conf` 会出现“装完当时有效、一重启 BBR 就没了”。本脚本已改为写入 `/etc/sysctl.d/99-snell-network.conf`，并在首次运行时把旧版写进 `/etc/sysctl.conf` 的三行迁移走（备份在 `/etc/snell/sysctl.conf.bak`）。
+
+装完或重启后，用菜单 8「一键体检」能看到 BBR / DNS / 时区的实际值与自愈服务状态；如果是从旧版覆盖安装，重新运行一次脚本（菜单 9 也可以）即可完成迁移。
 
 ## 升级 Snell 版本
 
@@ -66,16 +83,17 @@ Snell_26216 = snell, 服务器IP, 26216, psk=密码, version=6, mode=unshaped, r
 - PSK 由协议内派生为部署级流量特征，不同 PSK 的服务器流量特征不同；PSK 长度 12-255
 - systemd 以 nobody 运行，配置权限收紧为 640，节点信息 600
 - 安装依赖只保留 Snell 实际用到的：curl、unzip、UFW、iproute2、cron、ca-certificates（不再装 wget / tar / firewalld）
-- 网络优化只保留最简三项：BBR、fq、TCP Fast Open（`tcp_fastopen = 3`），其余参数保持系统默认
+- 网络优化只保留最简三项：BBR、fq、TCP Fast Open（`tcp_fastopen = 3`），写入 `/etc/sysctl.d/99-snell-network.conf`，其余参数保持系统默认（不再覆盖 `/etc/sysctl.conf`）
 - 官方下载源 `dl.nssurge.com` 只有 IPv4，纯 IPv6 服务器会自动改用仓库内 `vendor/` 的官方二进制备用源
 
 ## 注意事项
 
 - Snell v6 仍为 RC 测试版，官方可能在正式版前做不兼容协议调整，服务端与客户端都应保持最新测试版
 - 会启用 UFW 并重置现有防火墙规则
-- 会禁用 systemd-resolved 并覆盖 DNS 为 1.1.1.1 / 8.8.8.8
+- 会禁用 systemd-resolved 并覆盖 DNS 为 1.1.1.1 / 8.8.8.8（由 `snell-dns.service` 保持）
 - 内存 ≥ 1G 时会关闭全部 Swap 并安装开机禁用服务
-- 卸载不会还原以上系统改动
+- 会安装 `snell-net-tune.service` / `snell-dns.service` 两个开机自愈服务
+- 卸载默认保留以上系统改动（卸载时会打印手动还原命令）
 - 仅适合“服务器只跑代理”的场景
 
 ## 官方安装包 SHA256（vendor/ 备用源）
